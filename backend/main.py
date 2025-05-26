@@ -117,9 +117,6 @@ async def restart_bot_endpoint():
     bot_task = asyncio.create_task(bot.start_bot())
     return {"status": "Bot restarted"}
 
-@app.get("/api/current_strategy")
-async def get_current_strategy_endpoint():
-    return {"strategy": bot.current_strategy}
 
 @app.post("/api/set_strategy")
 async def set_strategy_endpoint(strategy_name: str):  # Primer, prilagodi ako treba više parametara
