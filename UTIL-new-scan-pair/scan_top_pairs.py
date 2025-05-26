@@ -3,7 +3,7 @@ import os
 import sqlite3
 from datetime import datetime
 
-DB_PATH = os.getenv("DB_PATH", "user_data/chovusbot.db")
+DB_PATH = os.getenv("DB_PATH", "../backend/user_data/chovusbot.db")
 exchange = ccxt.binance({
     "enableRateLimit": True,
     "options": {"defaultType": "future"}
