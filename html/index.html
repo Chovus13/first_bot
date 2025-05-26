@@ -1,242 +1,206 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HAOS-BOT Control Panel</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4; display: flex; flex-direction: column; min-height: 100vh; }
-        header { background-color: #333; color: white; padding: 10px; display: flex; justify-content: space-between; align-items: center; }
-        header h1 { margin: 0; font-size: 24px; }
-        #latency { font-size: 14px; }
-        .container { flex: 1; padding: 20px; display: flex; flex-direction: column; gap: 20px; }
-        .controls { display: flex; gap: 10px; flex-wrap: wrap; }
-        .controls button { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }
-        .controls button:hover { background-color: #0056b3; }
-        .status { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; background-color: white; padding: 20px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        .status div { font-size: 16px; }
-        .chart-container { background-color: white; padding: 20px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); height: 300px; }
-        .signals { background-color: white; padding: 20px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); max-height: 200px; overflow-y: auto; }
-        footer { background-color: #333; color: white; padding: 10px; text-align: center; font-size: 14px; }
-        @media (max-width: 768px) { .container { padding: 10px; } .status { grid-template-columns: 1fr; } .chart-container { height: 200px; } }
-    </style>
-</head>
-<body>
-    <header>
-        <h1>PsyBot Control Panel</h1>
-        <div id="latency">Latency: REST: N/A ms | WS: N/A ms</div>
-    </header>
-    <div class="container">
-        <div class="controls">
-  <button onclick="sendCommand('/start')">▶ START Bot</button>
-  <button onclick="sendCommand('/stop')">⏹ STOP Bot</button>
-  <button onclick="sendCommand('/status')">ℹ Status</button>
-  <button onclick="sendCommand('/restart')">🔁 Restart Bot</button>
+# pragma pylint: disable=missing-docstring, invalid-name, pointless-string-statement
+# flake8: noqa: F401
+# isort: skip_file
 
-  <br><br>
+import ccxt
+import time
+import math
+import json
+from datetime import datetime, timedelta
+import pandas as pd
+import numpy as np
+import threading
+import schedule
+import requests
+from pandas import DataFrame
+from typing import Optional, Union
 
-  <label for="strategySelect">Izaberi strategiju:</label>
-  <select id="strategySelect">
-    <option value="rsi">RSI</option>
-    <option value="sma">SMA</option>
-    <option value="dca">DCA</option>
-  </select>
-  <button onclick="setStrategy()">⚙️ Primeni strategiju</button>
-  <div id="status">Status će biti prikazan ovde.</div>
+# === CONFIG ===
+API_KEY = 'os.getenv('API_KEY')'
+API_SECRET = 'os.getenv('API_SECRET')'
+TELEGRAM_BOT_TOKEN = 'os.getenv('TELEGRAM_BOT_TOKEN')'
+TELEGRAM_CHAT_ID = 'os.getenv('TELEGRAM_CHAT_ID')'
 
-        </div>
+SYMBOLS = []
+ROUND_LEVELS = [0.01, 0.1, 0.5, 1, 5, 10, 50, 100, 500, 1000]
+VOLUME_SPIKE_THRESHOLD = 1.5
+TRADE_DURATION_LIMIT = 20
+STOP_LOSS_PERCENT = 0.01
+TRAILING_TP_STEP = 0.005
+TRAILING_TP_OFFSET = 0.02
 
-        <div class="status">
-    <div>Price: <span id="price">N/A</span> ETH/BTC</div>
-    <div>Support: <span id="support">0</span></div>
-    <div>Resistance: <span id="resistance">0</span></div>
-    <div>Trend: <span id="trend">N/A</span></div>
-    <div>Balance: <span id="balance">N/A</span> <span id="balanceCurrency">ETH</span></div>
-    <div>Strategija: <span id="strategija">off</span></div>
-</div>
-<div class="trades" id="trades">
-    <p>Aktivni trejdovi: Nema</p>
-</div>
+DAILY_LOG = []
+LOG_FILE = 'user_data/daily_trade_log.json'
 
-        </div>
-        <div class="chart-container">
-            <canvas id="orderbookChart"></canvas>
-        </div>
-        <div class="signals" id="signals">
-            <p>Nema signala</p>
-        </div>
-    <footer>
-        <p>Bot Status: <span id="botStatus">Disconnected</span> | Latest Signal: <span id="latestSignal">N/A</span></p>
-    </footer>
-
-    <script>
-            function sendCommand(endpoint) {
-      fetch(endpoint)
-        .then(response => response.text())
-        .then(data => {
-          document.getElementById('status').innerText = data;
-        })
-        .catch(error => {
-          document.getElementById('status').innerText = 'Greška: ' + error;
-        });
-    }
-
-    function setStrategy() {
-      const strategy = document.getElementById('strategySelect').value;
-      fetch('/set_strategy', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ strategy })
-      })
-      .then(response => response.text())
-      .then(data => {
-        document.getElementById('status').innerText = 'Strategija postavljena: ' + data;
-      })
-      .catch(error => {
-        document.getElementById('status').innerText = 'Greška: ' + error;
-      });
-    }
-
-            let ws = null;
-let chart = null;
-let lastRestPing = 0;
-let lastWsPing = 0;
-let lastWsPong = 0;
-let wsPingStart = 0;
-
-function connectWebSocket() {
-    ws = new WebSocket('ws://127.0.0.1/ws');
-    ws.onopen = () => {
-        console.log('WebSocket connected');
-        document.getElementById('botStatus').textContent = 'Connected';
-        setInterval(() => {
-            if (ws.readyState === WebSocket.OPEN) {
-                wsPingStart = Date.now();
-                ws.send(JSON.stringify({ type: 'ping' }));
-            }
-        }, 5000);
-    };
-    ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        if (data.type === 'ping') {
-            // Ignorišemo ping poruke od servera
-        } else if (data.type === 'pong') {
-            lastWsPong = Date.now();
-            updateLatency();
-        } else if (data.type === 'data') {
-            console.log('Primljeni podaci:', data);  // Dodajemo logovanje
-            updateUI(data);
-            updateChart(data);
-        }
-    };
-    ws.onclose = () => {
-        console.log('WebSocket disconnected');
-        document.getElementById('botStatus').textContent = 'Disconnected';
-        setTimeout(connectWebSocket, 5000);
-    };
-    ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        document.getElementById('botStatus').textContent = 'Error';
-    };
-}
-
-function initChart() {
-    const ctx = document.getElementById('orderbookChart').getContext('2d');
-    chart = new Chart(ctx, {
-        type: 'line',
-        data: {
-            datasets: [
-                { label: 'Support', data: [], borderColor: 'green', fill: false, stepped: true },
-                { label: 'Resistance', data: [], borderColor: 'red', fill: false, stepped: true }
-            ]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-                x: { type: 'linear', position: 'bottom', title: { display: true, text: 'Price (ETH/BTC)' } },
-                y: { title: { display: true, text: 'Volume' } }
-            }
-        }
-    });
-}
-
-function updateUI(data) {
-    console.log('Ažuriram UI sa podacima:', data);  // Dodajemo logovanje
-    document.getElementById('price').textContent = data.price || 'N/A';
-    document.getElementById('support').textContent = data.support || 0;
-    document.getElementById('resistance').textContent = data.resistance || 0;
-    document.getElementById('trend').textContent = data.trend || 'N/A';
-    document.getElementById('balance').textContent = data.balance !== undefined ? data.balance : 'N/A';  // Provera za undefined
-    document.getElementById('balanceCurrency').textContent = data.balance_currency || 'ETH';
-    document.getElementById('strategija').textContent = data.strategija_status || 'off';
-
-    const signalsDiv = document.getElementById('signals');
-    if (data.signals && data.signals.length > 0) {
-        signalsDiv.innerHTML = data.signals.map((signal, index) => `
-            <p>Signal ${index + 1}: ${signal.type} | Entry: ${signal.entry_price} | SL: ${signal.stop_loss} | TP: ${signal.take_profit} | Volume: ${signal.volume}
-            <button onclick="startTrade(${index})">Start Trade</button></p>
-        `).join('');
-        const strongestSignal = data.signals[0];
-        document.getElementById('latestSignal').textContent = `${strongestSignal.type} | Entry: ${strongestSignal.entry_price} | Volume: ${strongestSignal.volume}`;
-    } else {
-        signalsDiv.innerHTML = '<p>Nema signala</p>';
-        document.getElementById('latestSignal').textContent = 'N/A';
-    }
-
-    const tradesDiv = document.getElementById('trades');
-    if (data.active_trades && data.active_trades.length > 0) {
-        tradesDiv.innerHTML = data.active_trades.map(trade => `
-            <p>${trade.type} | Entry: ${trade.entry_price} | Current: ${trade.current_price} | Status: ${trade.status}</p>
-        `).join('');
-    } else {
-        tradesDiv.innerHTML = '<p>Aktivni trejdovi: Nema</p>';
-    }
-}
-
-function updateChart(data) {
-    const supportData = data.support_walls ? data.support_walls.map(wall => ({ x: wall[0], y: wall[1] })) : [];
-    const resistanceData = data.resistance_walls ? data.resistance_walls.map(wall => ({ x: wall[0], y: wall[1] })) : [];
-    chart.data.datasets[0].data = supportData;
-    chart.data.datasets[1].data = resistanceData;
-    chart.update();
-}
-
-function updateLatency() {
-    const startRest = Date.now();
-    fetch('/api/status')
-        .then(response => {
-            lastRestPing = Date.now() - startRest;
-            return response.json();
-        })
-        .catch(error => {
-            console.error('REST API error:', error);
-            lastRestPing = 'N/A';
-        })
-        .finally(() => {
-            let wsLatency = 'N/A';
-            if (wsPingStart && lastWsPong) {
-                wsLatency = lastWsPong - wsPingStart;
-                if (wsLatency < 0) wsLatency = 'N/A';
-            }
-            document.getElementById('latency').textContent = `Latency: REST: ${lastRestPing} ms | WS: ${wsLatency} ms`;
-        });
-}
+exchange = ccxt.binance({
+    'apiKey': 'os.getenv('API_KEY')',
+    'secret': 'os.getenv('API_SECRET')',
+    'options': {
+        'defaultType': 'future'
+    },
+    'enableRateLimit': True
+})
 
 
+def smart_allocation(score):
+    if score > 0.9:
+        return 0.5
+    elif score > 0.8:
+        return 0.3
+    elif score > 0.7:
+        return 0.2
+    else:
+        return 0.1
 
+def save_to_log(entry):
+    try:
+        with open(LOG_FILE, 'a') as f:
+            f.write(json.dumps(entry) + '\n')
+    except Exception as e:
+        print(f"Log save error: {e}")
 
+def learn_from_history():
+    try:
+        with open(LOG_FILE, 'r') as f:
+            lines = f.readlines()
+        data = [json.loads(line) for line in lines]
+        df = pd.DataFrame(data)
+        if df.empty:
+            print("[LEARN] No data to learn from.")
+            return
+        summary = df.groupby("symbol")["type"].value_counts().unstack().fillna(0)
+        print("[LEARN] Performance summary:")
+        print(summary)
+        print("[LEARN] Win rate per symbol:")
+        winrate = summary.get("TP", 0) / (summary.get("TP", 0) + summary.get("SL", 0))
+        print(winrate.sort_values(ascending=False))
+    except Exception as e:
+        print(f"[LEARN] Error analyzing history: {e}")
 
-window.onload = () => {
-    connectWebSocket();
-    initChart();
-    setInterval(updateLatency, 5000);
-};
-    </script>
-<div></div>
+def scan_pairs():
+    markets = exchange.load_markets()
+    pairs = []
+    for symbol, info in markets.items():
+        if '/USDT' in symbol and info.get('future', False):
+            try:
+                ticker = exchange.fetch_ticker(symbol)
+                volume = ticker.get('quoteVolume', 0)
+                price = ticker.get('last', 0)
+                if volume and price and price > 0:
+                    df = get_candles(symbol)
+                    crossover = confirm_smma_wma_crossover(df)
+                    in_fib_zone = fib_zone_check(df)
+                    score = ai_score(price, volume, volume, crossover, in_fib_zone)
+                    if score > 0.6:
+                        pairs.append((symbol, price, volume, score))
+            except Exception as e:
+                continue
+    pairs.sort(key=lambda x: x[3], reverse=True)
+    return pairs[:3]
 
-</body>
-</html>
+def get_candles(symbol, timeframe='15m', limit=100):
+    ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    return df
+
+def calc_smma(series, length):
+    smma = [series.iloc[0]]
+    for i in range(1, len(series)):
+        smma.append((smma[-1] * (length - 1) + series.iloc[i]) / length)
+    return pd.Series(smma, index=series.index)
+
+def calc_wma(series, length):
+    weights = range(1, length + 1)
+    return series.rolling(length).apply(lambda prices: sum(weights[i] * prices[i] for i in range(length)) / sum(weights), raw=True)
+
+def confirm_smma_wma_crossover(df):
+    smma = calc_smma(df['close'], 5)
+    wma = calc_wma(df['close'], 144)
+    return smma.iloc[-2] < wma.iloc[-2] and smma.iloc[-1] > wma.iloc[-1]
+
+def fib_zone_check(df):
+    high = df['high'].rolling(50).max()
+    low = df['low'].rolling(50).min()
+    fib_range = high - low
+    fib_382 = high - fib_range * 0.382
+    fib_618 = high - fib_range * 0.618
+    latest_price = df['close'].iloc[-1]
+    return fib_618.iloc[-1] <= latest_price <= fib_382.iloc[-1]
+
+def is_near_round(price):
+    for level in ROUND_LEVELS:
+        if abs(price % level - level) < 0.01 * level or price % level < 0.01 * level:
+            return True
+    return False
+
+def ai_score(price, volume, avg_volume, crossover, in_fib_zone):
+    score = 0
+    if is_near_round(price):
+        score += 1
+    if volume > avg_volume * VOLUME_SPIKE_THRESHOLD:
+        score += 1
+    if crossover:
+        score += 1.5
+    if in_fib_zone:
+        score += 0.5
+    return min(score / 4.0, 1.0)
+
+def monitor_trade(symbol, entry_price):
+    print(f"[TRAILING TP/SL] Monitoring {symbol}")
+    tp = entry_price * (1 + TRAILING_TP_OFFSET)
+    sl = entry_price * (1 - STOP_LOSS_PERCENT)
+    highest_price = entry_price
+
+    while True:
+        ticker = exchange.fetch_ticker(symbol)
+        price = ticker['last']
+
+        if price > highest_price:
+            highest_price = price
+            tp = highest_price * (1 - TRAILING_TP_STEP)
+
+        if price >= tp:
+            print(f"[TP] Exiting {symbol} at {price:.4f}")
+            trade = {"symbol": symbol, "type": "TP", "price": price, "profit": (price / entry_price) - 1, "timestamp": str(datetime.utcnow())}
+            DAILY_LOG.append(trade)
+            save_to_log(trade)
+            exchange.create_market_sell_order(symbol, 'ALL')
+            break
+
+        if price <= sl:
+            print(f"[SL] Exiting {symbol} at {price:.4f}")
+            trade = {"symbol": symbol, "type": "SL", "price": price, "loss": 1 - (price / entry_price), "timestamp": str(datetime.utcnow())}
+            DAILY_LOG.append(trade)
+            save_to_log(trade)
+            exchange.create_market_sell_order(symbol, 'ALL')
+            break
+
+        time.sleep(2)
+
+def open_long(symbol, score):
+    print(f"[LONG] Opening position on {symbol} with score {score:.2f}")
+    market = exchange.market(symbol)
+    ticker = exchange.fetch_ticker(symbol)
+    price = ticker['ask']
+    balance = exchange.fetch_balance({"type": "future"})
+    usdt_balance = balance['total']['USDT'] * 0.99
+    alloc = smart_allocation(score)
+    quantity = round((usdt_balance * alloc * 10) / price, int(market['precision']['amount']))
+    order = exchange.create_market_buy_order(symbol, quantity)
+    return order, price
+
+print("[RUNNING] Scanning...")
+while True:
+    try:
+        learn_from_history()
+        targets = scan_pairs()
+        print(f"Found {len(targets)} high-score targets")
+        for (symbol, price, volume, score) in targets:
+            order, entry = open_long(symbol, score)
+            start_time = time.time()
+            while time.time() - start_time < TRADE_DURATION_LIMIT:
+                monitor_trade(symbol, entry)
+                break
+    except Exception as ex:
+        print(f"Main loop error: {str(ex)}")
+    time.sleep(10)
