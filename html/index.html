@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HAOS-BOT Control Panel</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4; display: flex; flex-direction: column; min-height: 100vh; }
+        header { background-color: #333; color: white; padding: 10px; display: flex; justify-content: space-between; align-items: center; }
+        header h1 { margin: 0; font-size: 24px; }
+        #latency { font-size: 14px; }
+        .container { flex: 1; padding: 20px; display: flex; flex-direction: column; gap: 20px; }
+        .controls { display: flex; gap: 10px; flex-wrap: wrap; }
+        .controls button { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        .controls button:hover { background-color: #0056b3; }
+        .status { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; background-color: white; padding: 20px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .status div { font-size: 16px; }
+        .chart-container { background-color: white; padding: 20px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); height: 300px; }
+        .signals { background-color: white; padding: 20px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); max-height: 200px; overflow-y: auto; }
+        footer { background-color: #333; color: white; padding: 10px; text-align: center; font-size: 14px; }
+        @media (max-width: 768px) { .container { padding: 10px; } .status { grid-template-columns: 1fr; } .chart-container { height: 200px; } }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>PsyBot Control Panel</h1>
+        <div id="latency">Latency: REST: N/A ms | WS: N/A ms</div>
+    </header>
+    <div class="container">
+        <div class="controls">
+            <button onclick="setStrategija('on')">strategija On</button>
+            <button onclick="setStrategija('off')">strategija Off</button>
+        </div>
+
+        <div class="status">
+    <div>Price: <span id="price">N/A</span> ETH/BTC</div>
+    <div>Support: <span id="support">0</span></div>
+    <div>Resistance: <span id="resistance">0</span></div>
+    <div>Trend: <span id="trend">N/A</span></div>
+    <div>Balance: <span id="balance">N/A</span> <span id="balanceCurrency">ETH</span></div>
+    <div>Strategija: <span id="strategija">off</span></div>
+</div>
+<div class="trades" id="trades">
+    <p>Aktivni trejdovi: Nema</p>
+</div>
+
+        </div>
+        <div class="chart-container">
+            <canvas id="orderbookChart"></canvas>
+        </div>
+        <div class="signals" id="signals">
+            <p>Nema signala</p>
+        </div>
+    <footer>
+        <p>Bot Status: <span id="botStatus">Disconnected</span> | Latest Signal: <span id="latestSignal">N/A</span></p>
+    </footer>
+
+    <script>
+            let ws = null;
+let chart = null;
+let lastRestPing = 0;
+let lastWsPing = 0;
+let lastWsPong = 0;
+let wsPingStart = 0;
+
+function connectWebSocket() {
+    ws = new WebSocket('ws://127.0.0.1/ws');
+    ws.onopen = () => {
+        console.log('WebSocket connected');
+        document.getElementById('botStatus').textContent = 'Connected';
+        setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+                wsPingStart = Date.now();
+                ws.send(JSON.stringify({ type: 'ping' }));
+            }
+        }, 5000);
+    };
+    ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === 'ping') {
+            // Ignorišemo ping poruke od servera
+        } else if (data.type === 'pong') {
+            lastWsPong = Date.now();
+            updateLatency();
+        } else if (data.type === 'data') {
+            console.log('Primljeni podaci:', data);  // Dodajemo logovanje
+            updateUI(data);
+            updateChart(data);
+        }
+    };
+    ws.onclose = () => {
+        console.log('WebSocket disconnected');
+        document.getElementById('botStatus').textContent = 'Disconnected';
+        setTimeout(connectWebSocket, 5000);
+    };
+    ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        document.getElementById('botStatus').textContent = 'Error';
+    };
+}
+
+function initChart() {
+    const ctx = document.getElementById('orderbookChart').getContext('2d');
+    chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            datasets: [
+                { label: 'Support', data: [], borderColor: 'green', fill: false, stepped: true },
+                { label: 'Resistance', data: [], borderColor: 'red', fill: false, stepped: true }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                x: { type: 'linear', position: 'bottom', title: { display: true, text: 'Price (ETH/BTC)' } },
+                y: { title: { display: true, text: 'Volume' } }
+            }
+        }
+    });
+}
+
+function updateUI(data) {
+    console.log('Ažuriram UI sa podacima:', data);  // Dodajemo logovanje
+    document.getElementById('price').textContent = data.price || 'N/A';
+    document.getElementById('support').textContent = data.support || 0;
+    document.getElementById('resistance').textContent = data.resistance || 0;
+    document.getElementById('trend').textContent = data.trend || 'N/A';
+    document.getElementById('balance').textContent = data.balance !== undefined ? data.balance : 'N/A';  // Provera za undefined
+    document.getElementById('balanceCurrency').textContent = data.balance_currency || 'ETH';
+    document.getElementById('strategija').textContent = data.strategija_status || 'off';
+
+    const signalsDiv = document.getElementById('signals');
+    if (data.signals && data.signals.length > 0) {
+        signalsDiv.innerHTML = data.signals.map((signal, index) => `
+            <p>Signal ${index + 1}: ${signal.type} | Entry: ${signal.entry_price} | SL: ${signal.stop_loss} | TP: ${signal.take_profit} | Volume: ${signal.volume}
+            <button onclick="startTrade(${index})">Start Trade</button></p>
+        `).join('');
+        const strongestSignal = data.signals[0];
+        document.getElementById('latestSignal').textContent = `${strongestSignal.type} | Entry: ${strongestSignal.entry_price} | Volume: ${strongestSignal.volume}`;
+    } else {
+        signalsDiv.innerHTML = '<p>Nema signala</p>';
+        document.getElementById('latestSignal').textContent = 'N/A';
+    }
+
+    const tradesDiv = document.getElementById('trades');
+    if (data.active_trades && data.active_trades.length > 0) {
+        tradesDiv.innerHTML = data.active_trades.map(trade => `
+            <p>${trade.type} | Entry: ${trade.entry_price} | Current: ${trade.current_price} | Status: ${trade.status}</p>
+        `).join('');
+    } else {
+        tradesDiv.innerHTML = '<p>Aktivni trejdovi: Nema</p>';
+    }
+}
+
+function updateChart(data) {
+    const supportData = data.support_walls ? data.support_walls.map(wall => ({ x: wall[0], y: wall[1] })) : [];
+    const resistanceData = data.resistance_walls ? data.resistance_walls.map(wall => ({ x: wall[0], y: wall[1] })) : [];
+    chart.data.datasets[0].data = supportData;
+    chart.data.datasets[1].data = resistanceData;
+    chart.update();
+}
+
+function updateLatency() {
+    const startRest = Date.now();
+    fetch('/api/status')
+        .then(response => {
+            lastRestPing = Date.now() - startRest;
+            return response.json();
+        })
+        .catch(error => {
+            console.error('REST API error:', error);
+            lastRestPing = 'N/A';
+        })
+        .finally(() => {
+            let wsLatency = 'N/A';
+            if (wsPingStart && lastWsPong) {
+                wsLatency = lastWsPong - wsPingStart;
+                if (wsLatency < 0) wsLatency = 'N/A';
+            }
+            document.getElementById('latency').textContent = `Latency: REST: ${lastRestPing} ms | WS: ${wsLatency} ms`;
+        });
+}
+
+
+
+
+
+window.onload = () => {
+    connectWebSocket();
+    initChart();
+    setInterval(updateLatency, 5000);
+};
+    </script>
+<div></div>
+
+// === Dugmad ===
+const startBtn = document.createElement("button");
+startBtn.textContent = "▶ START";
+startBtn.style.backgroundColor = "#00ff66";
+startBtn.style.color = "#000";
+startBtn.style.padding = "1rem 2rem";
+startBtn.style.fontWeight = "bold";
+startBtn.onclick = () => {
+  fetch("/start", { method: "POST" })
+    .then(() => updateStatus())
+    .catch((e) => alert("Start failed: " + e));
+};
+btnContainer.appendChild(startBtn);
+
+const stopBtn = document.createElement("button");
+stopBtn.textContent = "⏸ STOP";
+stopBtn.style.backgroundColor = "#ff4444";
+stopBtn.style.color = "#fff";
+stopBtn.style.padding = "1rem 2rem";
+stopBtn.style.fontWeight = "bold";
+stopBtn.onclick = () => {
+  fetch("/pause", { method: "POST" })
+    .then(() => updateStatus())
+    .catch((e) => alert("Pause failed: " + e));
+};
+btnContainer.appendChild(stopBtn);
+
+// === Strategija (select) ===
+const strategyBox = document.createElement("select");
+strategyBox.style.marginTop = "1rem";
+strategyBox.style.display = "block";
+strategyBox.style.marginLeft = "auto";
+strategyBox.style.marginRight = "auto";
+strategyBox.style.padding = "0.5rem";
+strategyBox.style.fontSize = "1rem";
+
+["default", "snipe-v1", "smart-ai", "fallback"].forEach(str => {
+  const opt = document.createElement("option");
+  opt.value = str;
+  opt.text = str;
+  strategyBox.appendChild(opt);
+});
+strategyBox.onchange = () => {
+  fetch("/strategy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ strategy: strategyBox.value }),
+  })
+    .then(() => updateStatus())
+    .catch((e) => alert("Strategy update failed: " + e));
+};
+document.body.appendChild(strategyBox);
+
+// === Status updater ===
+function updateStatus() {
+  fetch("/api/status")
+    .then(res => res.json())
+    .then(data => {
+      statusText.textContent = `Status: ${data.status} | Strategy: ${data.active_strategy}`;
+      strategyBox.value = data.active_strategy || "default";
+    })
+    .catch(() => {
+      statusText.textContent = "⚠️ Error fetching status";
+    });
+}
+updateStatus();
+setInterval(updateStatus, 10000);
+
+// === Bonus 🤘 ===
+updateStatus();
+setInterval(updateStatus, 10000);
+
+const statusTag = document.createElement("h2");
+statusTag.id = "activation-status";
+statusTag.innerText = "🦾 Chovus bot aktiviran!";
+statusTag.style.textAlign = "center";
+statusTag.style.marginTop = "2rem";
+statusTag.style.color = "#39ff14";
+document.body.appendChild(statusTag);
+
+console.log('Welcome to ChovusBot v3.3!');
+
+</body>
+</html>
