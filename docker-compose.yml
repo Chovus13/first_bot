@@ -1,0 +1,45 @@
+
+services:
+  v33:
+    build: .
+    container_name: v33-main
+    restart: unless-stopped
+    volumes:
+      - .:/app # Mapirate vaš kod u /app
+      - ./html:/app/html # Ako main.py očekuje html u /app/html
+      - ./logs:/app/logs # Ako main.py piše logove u /app/logs
+      - ./user_data:/app/user_data
+    environment:
+      - CONFIG_PATH=/app/user_data/config.json
+    env_file:
+      - .env
+    working_dir: /app
+    networks:
+      - haos-network
+    ports:
+      - "8024:8024"
+
+  nginx:
+    image: nginx:latest
+    container_name: v33-nginx
+    ports:
+      - "8033:8033"
+    volumes:
+      - .:/app
+      - ./html:/usr/share/nginx/html
+      - ./logs:/logs
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    working_dir: /app
+    depends_on:
+      - v33
+#    command: >
+#      sh -c "cp -r /app/web/dist/* /usr/share/nginx/html && \
+#             chown -R "$USER":www-data /usr/share/nginx/html && \
+#             chmod -R 0755 /usr/share/nginx/html"
+    networks:
+      - haos-network
+
+networks:
+  haos-network:
+    driver: bridge
+

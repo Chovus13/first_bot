@@ -1,0 +1,23 @@
+.env
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+venv/
+user_data/chovusbot.db
+.venv/
+.pytest_cache/
+.idea/  # Za PyCharm
+logs/
+config.json
+daily_trade_log.json
+UTIL-new-scan-pair/
+web/
+backend/
+api/
+docker-compose.yml
+Dockerfile
+nginx.conf
+requirements.txt
+Extensions/
+Scratches/
+

@@ -1,3 +1,4 @@
+# main.py
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -6,8 +7,8 @@ import asyncio
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-import requests # Dodati import za requests
-from ChovusSmartBot_v9 import ChovusSmartBot, get_config, set_config, log_trade, log_score, cursor, conn # Uvezi potrebne funkcije i klase iz bota
+import sqlite3
+from ChovusSmartBot_v9 import ChovusSmartBot, get_config, set_config, log_trade, log_score
 
 load_dotenv()
 
@@ -15,39 +16,36 @@ key = os.getenv("API_KEY", "")[:4] + "..." + os.getenv("API_KEY", "")[-4:]
 print(f"🔑 Using API_KEY: {key}")
 
 app = FastAPI()
-
-# Postavi direktorijum gde su HTML fajlovi
-# AKO JE index.html U KORENU PROJEKTA, KORISTI directory="."
-# AKO JE U PODFOLDERU "html", KORISTI directory="html"
-# Prema tvom GitHubu, index.html je u korenu
-templates = Jinja2Templates(directory=".") # PROMENJENO OVO!
+templates = Jinja2Templates(directory="html")
+DB_PATH = Path(os.getenv("DB_PATH", Path(__file__).resolve().parent / "user_data" / "chovusbot.db"))
 
 # Inicijalizuj bota
 bot = ChovusSmartBot()
-bot_task = None  # Za čuvanje asyncio taska bota
+bot_task = None
 
 # API modeli
 class TelegramMessage(BaseModel):
     message: str
 
-class StrategyRequest(BaseModel): # Dodao sam model za set_strategy
+class StrategyRequest(BaseModel):
     strategy_name: str
+
+class LeverageRequest(BaseModel):
+    leverage: int
+
+class AmountRequest(BaseModel):
+    amount: float
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
-    """Prikazuje index.html stranicu."""
     return templates.TemplateResponse("index.html", {"request": request})
-
-# --- API Endpoints za upravljanje botom ---
 
 @app.post("/api/start")
 async def start_bot_endpoint():
-    """Startuje bota."""
     global bot_task
     if bot_task is None or bot_task.done():
         try:
-            await bot.start_bot() # Pozovi asinhronu metodu start_bot klase ChovusSmartBot
-            # bot.start_bot() unutra stvara asyncio.Task, ne treba nam ovde da ga čuvamo
+            await bot.start_bot()
             return {"status": "Bot started"}
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to start bot: {e}")
@@ -55,15 +53,12 @@ async def start_bot_endpoint():
 
 @app.post("/api/stop")
 async def stop_bot_endpoint():
-    """Zaustavlja bota."""
     global bot_task
-    if bot.running: # Proveri status bota preko instance klase
+    if bot.running:
         try:
-            bot.stop_bot() # Ovo samo postavlja self.running = False, bot loop će reagovati
-            # Sačekaj da se bot zaista zaustavi, ako je potrebno (može biti kompleksno)
-            # Ako _bot_task postoji i nije done, možeš da ga čekaš.
+            bot.stop_bot()
             if bot._bot_task and not bot._bot_task.done():
-                await bot._bot_task # Sačekaj da se glavni loop bota završi
+                await bot._bot_task
             return {"status": "Bot stopped"}
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to stop bot: {e}")
@@ -71,57 +66,118 @@ async def stop_bot_endpoint():
 
 @app.get("/api/status")
 async def get_bot_status_endpoint():
-    """Vraća status bota."""
-    # Ispravno pozivanje metode bota za status
-    return {"status": bot.get_bot_status()}
+    return {"status": bot.get_bot_status(), "strategy": bot.current_strategy}
 
 @app.post("/api/restart")
 async def restart_bot_endpoint():
-    """Restartuje bota."""
     if bot.running:
         bot.stop_bot()
         if bot._bot_task and not bot._bot_task.done():
-            await bot._bot_task # Sačekaj da se zaustavi pre restarta
+            await bot._bot_task
     await bot.start_bot()
     return {"status": "Bot restarted"}
 
 @app.post("/api/set_strategy")
-async def set_strategy_endpoint(request: StrategyRequest): # Koristi Pydantic model
-    """Postavlja strategiju za bota."""
-    strategy_status = bot.set_bot_strategy(request.strategy_name) # Pozovi metodu na instanci bota
+async def set_strategy_endpoint(request: StrategyRequest):
+    strategy_status = bot.set_bot_strategy(request.strategy_name)
     return {"status": f"Strategy set to: {strategy_status}"}
 
-@app.get("/api/config") # Dodao sam prefix /api
+@app.get("/api/config")
 def get_config_api():
-    # Funkcija get_all_config mora biti definisana negde (može u bot fajlu)
-    # Ili se sve config funkcije moraju prebaciti u main.py ili koristiti bot instancu
-    from ChovusSmartBot_v9 import get_all_config # Privremeni import ako nije već globalno
     return get_all_config()
 
-@app.get("/api/balance") # Dodao sam prefix /api
+@app.get("/api/balance")
 def get_balance():
     return {
         "wallet_balance": get_config("balance", "0"),
         "score": get_config("score", "0")
     }
 
-@app.get("/api/trades") # Dodao sam prefix /api
+@app.get("/api/trades")
 def get_trades():
-    cursor.execute("SELECT symbol, price, timestamp FROM trades ORDER BY id DESC LIMIT 20")
-    return [{"symbol": s, "price": p, "time": t} for s, p, t in cursor.fetchall()]
+    try:
+        with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT symbol, price, timestamp, outcome FROM trades ORDER BY id DESC LIMIT 20")
+            return [{"symbol": s, "price": p, "time": t, "outcome": o} for s, p, t, o in cursor.fetchall()]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching trades: {e}")
 
-@app.get("/api/pairs") # Dodao sam prefix /api
+@app.get("/api/pairs")
 def get_pairs():
     return get_config("available_pairs", "").split(",")
 
-@app.post("/api/send_telegram") # Dodao sam prefix /api
+@app.post("/api/send_telegram")
 async def send_telegram_endpoint(msg: TelegramMessage):
-    # Pozovi metodu bota za slanje Telegram poruka
     return bot._send_telegram_message(msg.message)
 
-# OBAVEZNO: Ukloni sve while True petlje i blokirajući kod iz main.py
-# Npr. ukloni bot_loop, scan_top_pairs, update_db_pairs, send_report Thread, get_price itd.
-# Sve to treba da bude unutar ChovusSmartBot klase ili pomoćnih funkcija koje poziva bot.
+@app.get("/api/market_data")
+async def get_market_data(symbol: str = "ETH/BTC"):
+    try:
+        ticker = await bot.exchange.fetch_ticker(symbol)
+        df = await bot.get_candles(symbol)
+        high = df['high'].rolling(50).max().iloc[-1]
+        low = df['low'].rolling(50).min().iloc[-1]
+        fib_range = high - low
+        support = high - fib_range * 0.618
+        resistance = high - fib_range * 0.382
+        smma = bot.calc_smma(df['close'], 5)
+        wma = bot.calc_wma(df['close'], 144)
+        trend = "Bullish" if smma.iloc[-1] > wma.iloc[-1] else "Bearish"
+        return {
+            "price": ticker['last'],
+            "support": support,
+            "resistance": resistance,
+            "trend": trend
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching market data: {e}")
 
-# Bot startuje samo na zahtev korisnika preko /api/start
-# Nema globalnog bot_state dictionary-ja u main.py, jer se stanje održava u instanci bota
+@app.get("/api/candidates")
+async def get_candidates():
+    try:
+        with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT symbol, price, score, timestamp FROM candidates ORDER BY id DESC LIMIT 5")
+            return [{"symbol": s, "price": p, "score": sc, "time": t} for s, p, sc, t in cursor.fetchall()]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching candidates: {e}")
+
+@app.get("/api/signals")
+async def get_signals():
+    try:
+        with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT symbol, price, timestamp FROM trades WHERE outcome = 'TP' ORDER BY id DESC LIMIT 5")
+            signals = [{"symbol": s, "price": p, "time": t} for s, p, t in cursor.fetchall()]
+            return signals if signals else [{"symbol": "N/A", "price": 0, "time": "N/A"}]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching signals: {e}")
+
+@app.post("/api/set_leverage")
+async def set_leverage(request: LeverageRequest):
+    try:
+        bot.set_leverage(request.leverage)
+        set_config("leverage", str(request.leverage))
+        return {"status": f"Leverage set to: {request.leverage}x"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error setting leverage: {e}")
+
+@app.post("/api/set_manual_amount")
+async def set_manual_amount(request: AmountRequest):
+    try:
+        bot.set_manual_amount(request.amount)
+        set_config("manual_amount", str(request.amount))
+        return {"status": f"Manual amount set to: {request.amount} USDT"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error setting manual amount: {e}")
+
+@app.get("/api/logs")
+async def get_logs():
+    try:
+        with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT timestamp, message FROM bot_logs ORDER BY id DESC LIMIT 10")
+            return [{"time": t, "message": m} for t, m in cursor.fetchall()]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching logs: {e}")
