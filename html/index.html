@@ -29,8 +29,22 @@
     </header>
     <div class="container">
         <div class="controls">
-            <button onclick="setStrategija('on')">strategija On</button>
-            <button onclick="setStrategija('off')">strategija Off</button>
+  <button onclick="sendCommand('/start')">▶ START Bot</button>
+  <button onclick="sendCommand('/stop')">⏹ STOP Bot</button>
+  <button onclick="sendCommand('/status')">ℹ Status</button>
+  <button onclick="sendCommand('/restart')">🔁 Restart Bot</button>
+
+  <br><br>
+
+  <label for="strategySelect">Izaberi strategiju:</label>
+  <select id="strategySelect">
+    <option value="rsi">RSI</option>
+    <option value="sma">SMA</option>
+    <option value="dca">DCA</option>
+  </select>
+  <button onclick="setStrategy()">⚙️ Primeni strategiju</button>
+  <div id="status">Status će biti prikazan ovde.</div>
+
         </div>
 
         <div class="status">
@@ -57,6 +71,35 @@
     </footer>
 
     <script>
+            function sendCommand(endpoint) {
+      fetch(endpoint)
+        .then(response => response.text())
+        .then(data => {
+          document.getElementById('status').innerText = data;
+        })
+        .catch(error => {
+          document.getElementById('status').innerText = 'Greška: ' + error;
+        });
+    }
+
+    function setStrategy() {
+      const strategy = document.getElementById('strategySelect').value;
+      fetch('/set_strategy', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ strategy })
+      })
+      .then(response => response.text())
+      .then(data => {
+        document.getElementById('status').innerText = 'Strategija postavljena: ' + data;
+      })
+      .catch(error => {
+        document.getElementById('status').innerText = 'Greška: ' + error;
+      });
+    }
+
             let ws = null;
 let chart = null;
 let lastRestPing = 0;
@@ -194,88 +237,6 @@ window.onload = () => {
 };
     </script>
 <div></div>
-
-// === Dugmad ===
-const startBtn = document.createElement("button");
-startBtn.textContent = "▶ START";
-startBtn.style.backgroundColor = "#00ff66";
-startBtn.style.color = "#000";
-startBtn.style.padding = "1rem 2rem";
-startBtn.style.fontWeight = "bold";
-startBtn.onclick = () => {
-  fetch("/start", { method: "POST" })
-    .then(() => updateStatus())
-    .catch((e) => alert("Start failed: " + e));
-};
-btnContainer.appendChild(startBtn);
-
-const stopBtn = document.createElement("button");
-stopBtn.textContent = "⏸ STOP";
-stopBtn.style.backgroundColor = "#ff4444";
-stopBtn.style.color = "#fff";
-stopBtn.style.padding = "1rem 2rem";
-stopBtn.style.fontWeight = "bold";
-stopBtn.onclick = () => {
-  fetch("/pause", { method: "POST" })
-    .then(() => updateStatus())
-    .catch((e) => alert("Pause failed: " + e));
-};
-btnContainer.appendChild(stopBtn);
-
-// === Strategija (select) ===
-const strategyBox = document.createElement("select");
-strategyBox.style.marginTop = "1rem";
-strategyBox.style.display = "block";
-strategyBox.style.marginLeft = "auto";
-strategyBox.style.marginRight = "auto";
-strategyBox.style.padding = "0.5rem";
-strategyBox.style.fontSize = "1rem";
-
-["default", "snipe-v1", "smart-ai", "fallback"].forEach(str => {
-  const opt = document.createElement("option");
-  opt.value = str;
-  opt.text = str;
-  strategyBox.appendChild(opt);
-});
-strategyBox.onchange = () => {
-  fetch("/strategy", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ strategy: strategyBox.value }),
-  })
-    .then(() => updateStatus())
-    .catch((e) => alert("Strategy update failed: " + e));
-};
-document.body.appendChild(strategyBox);
-
-// === Status updater ===
-function updateStatus() {
-  fetch("/api/status")
-    .then(res => res.json())
-    .then(data => {
-      statusText.textContent = `Status: ${data.status} | Strategy: ${data.active_strategy}`;
-      strategyBox.value = data.active_strategy || "default";
-    })
-    .catch(() => {
-      statusText.textContent = "⚠️ Error fetching status";
-    });
-}
-updateStatus();
-setInterval(updateStatus, 10000);
-
-// === Bonus 🤘 ===
-updateStatus();
-setInterval(updateStatus, 10000);
-
-const statusTag = document.createElement("h2");
-statusTag.id = "activation-status";
-statusTag.innerText = "🦾 Chovus bot aktiviran!";
-statusTag.style.textAlign = "center";
-statusTag.style.marginTop = "2rem";
-statusTag.style.color = "#39ff14";
-document.body.appendChild(statusTag);
-
-console.log('Welcome to ChovusBot v3.3!');
 
 </body>
 </html>

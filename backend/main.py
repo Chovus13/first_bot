@@ -1,10 +1,10 @@
-from fastapi import FastAPI, WebSocket, HTTPException, requests
+from fastapi import FastAPI, WebSocket, HTTPException, Request, Form
 from pydantic import BaseModel
 import os, json, sqlite3, time
 from pathlib import Path
 from dotenv import load_dotenv
-#from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse, HTMLResponse
 from threading import Thread
 import ccxt
 from datetime import datetime
@@ -37,9 +37,11 @@ key = os.getenv("API_KEY", "")[:4] + "..." + os.getenv("API_KEY", "")[-4:]
 print(f"🔑 Using API_KEY: {key}")
 
 app = FastAPI()
+#templates = Jinja2Templates(directory="templates")
+
 
 # === Static frontend ===
-#app.mount("/ui", StaticFiles(directory=Path(__file__).resolve().parent.parent / "web" / "dist", html=True), name="static")
+app.mount("/ui", StaticFiles(directory=Path(__file__).resolve().parent.parent / "web" / "dist", html=True), name="static")
 
 # === Baza ===
 DB_PATH = Path(os.getenv("DB_PATH", Path(__file__).resolve().parents[1] / "user_data" / "chovusbot.db"))
@@ -233,12 +235,12 @@ def get_status():
 def get_config_api():
     return get_all_config()
 
-# @app.post("/strategy")
-# async def update_strategy(request: request):
-#     body = await requests.json()
-#     new_strategy = body.get("strategy", "default")
-#     set_config("strategy", new_strategy)
-#     return {"message": "Strategy updated!", "strategy": new_strategy}
+ # @app.post("/strategy")
+ # async def update_strategy(request: Request):
+ #     body = await requests.json()
+ #     new_strategy = body.get("strategy", "default")
+ #     set_config("strategy", new_strategy)
+ #     return {"message": "Strategy updated!", "strategy": new_strategy}
 
 @app.get("/balance")
 def get_balance():
