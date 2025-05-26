@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PsyBot Control Panel</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="[https://cdn.jsdelivr.net/npm/chart.js](https://cdn.jsdelivr.net/npm/chart.js)"></script>
     <style>
         body { font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4; display: flex; flex-direction: column; min-height: 100vh; }
         header { background-color: #333; color: white; padding: 10px; display: flex; justify-content: space-between; align-items: center; }
@@ -17,7 +17,7 @@
         .status { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; background-color: white; padding: 20px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
         .status div { font-size: 16px; }
         .chart-container { background-color: white; padding: 20px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); height: 300px; }
-        .signals { background-color: white; padding: 20px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); max-height: 200px; overflow-y: auto; }
+        .signals { background-color: white; padding: 20px; border-radius: 5px; box-shadow: 0 2px 5px rgba[0,0,0,0.1); max-height: 200px; overflow-y: auto; }
         footer { background-color: #333; color: white; padding: 10px; text-align: center; font-size: 14px; }
         @media (max-width: 768px) { .container { padding: 10px; } .status { grid-template-columns: 1fr; } .chart-container { height: 200px; } }
     </style>
@@ -25,8 +25,7 @@
 <body>
 <header>
     <h1>PsyBot Control Panel</h1>
-    <div id="latency">Latency: REST: N/A ms | WS: N/A ms</div>
-</header>
+    <div id="latency">Latency: REST: N/A ms</div> </header>
 <div class="container">
     <div class="controls">
         <button onclick="startBot()">Start Bot</button>
@@ -39,7 +38,8 @@
             <option value="RSI">RSI</option>
             <option value="SMA">SMA</option>
             <option value="DCA">DCA</option>
-            <option value="Default">Default</option> </select>
+            <option value="Default">Default</option>
+        </select>
         <button onclick="setStrategyFromSelect()">⚙️ Primeni strategiju</button>
         <div id="status">Status će biti prikazan ovde.</div>
     </div>
@@ -52,7 +52,8 @@
         <div>Balance: <span id="balance">N/A</span> <span id="balanceCurrency">USDT</span></div> <div>Strategija: <span id="strategija">off</span></div>
     </div>
     <div class="trades" id="trades">
-        <p>Aktivni trejdovi: Nema</p>
+        <h3>Poslednji Trejdovi:</h3>
+        <p>Nema trejdova u bazi.</p>
     </div>
 
 </div>
@@ -70,9 +71,6 @@
     const statusDiv = document.getElementById('status');
     let chart = null;
     let lastRestPing = 0;
-    let lastWsPing = 0;
-    let lastWsPong = 0;
-    let wsPingStart = 0;
 
     // Funkcija za slanje komandi (GET i POST)
     async function sendCommand(endpoint, method = 'GET', body = null) {
@@ -85,10 +83,10 @@
             const response = await fetch(endpoint, options);
             const data = await response.json();
             alert(data.status || data.message); // Prikaz statusa iz odgovora
-            fetchStatus(); // Uvek ažuriraj status bota nakon akcije
+            await updateUIFromRest(); // Uvek ažuriraj status bota nakon akcije
         } catch (error) {
             console.error(`Error with ${method} ${endpoint}:`, error);
-            alert(`Greška: ${error.message || error}`);
+            alert(`Greška: ${error.detail || error.message || error}`);
         }
     }
 
@@ -126,7 +124,7 @@
             const tradesDiv = document.getElementById('trades');
             if (trades.length > 0) {
                 tradesDiv.innerHTML = '<h3>Poslednji Trejdovi:</h3>' + trades.map(trade => `
-                    <p><strong>${trade.symbol}</strong> | Cena: ${parseFloat(trade.price).toFixed(4)} | Vreme: ${trade.time}</p>
+                    <p><strong>${trade.symbol}</strong> | Cena: ${parseFloat(trade.price).toFixed(4)} | Vreme: ${trade.time} | Ishod: ${trade.outcome}</p>
                 `).join('');
             } else {
                 tradesDiv.innerHTML = '<p>Nema trejdova u bazi.</p>';
@@ -136,7 +134,6 @@
             document.getElementById('trades').innerHTML = '<p>Greška pri učitavanju trejdova.</p>';
         }
     }
-
 
     function startBot() { sendCommand('/api/start', 'POST'); }
     function stopBot() { sendCommand('/api/stop', 'POST'); }
@@ -148,8 +145,7 @@
         sendCommand('/api/set_strategy', 'POST', { strategy_name: strategyName });
     }
 
-    // Nije ti potreban websocket jer nemaš ws rute u main.py
-    // Uklonio sam ws logiku. Ako želiš WebSocket, moraš ga implementirati u main.py
+    // Uklonjena sva WebSocket logika
 
     function initChart() {
         const ctx = document.getElementById('orderbookChart').getContext('2d');
@@ -165,7 +161,7 @@
                 responsive: true,
                 maintainAspectRatio: false,
                 scales: {
-                    x: { type: 'linear', position: 'bottom', title: { display: true, text: 'Price' } }, // Promeni tekst u 'Price'
+                    x: { type: 'linear', position: 'bottom', title: { display: true, text: 'Price' } },
                     y: { title: { display: true, text: 'Volume' } }
                 }
             }
@@ -174,16 +170,12 @@
 
     // Funkcija za ažuriranje UI-ja (podaci sada dolaze iz REST API poziva)
     async function updateUIFromRest() {
-        // Možeš dodati više REST API poziva ovde da dobiješ sve podatke
-        // Trenutno imamo samo status, balance i trades
         await fetchStatus();
         await fetchBalanceAndStrategy();
         await fetchTrades();
-        // Ostali podaci kao price, support, resistance, trend, signals, active_trades
-        // moraju imati svoje API endpointe u main.py i biti pozivani ovde.
-        // Npr. await fetchPriceData(); await fetchSignals();
+        // Ovde možeš dodati i pozive za Price, Support, Resistance, Trend, Signals ako ih implementiraš kao API endpointe
+        // Npr. const priceData = await fetch('/api/price').then(r => r.json()); document.getElementById('price').textContent = priceData.price;
     }
-
 
     function updateLatency() {
         const startRest = Date.now();
@@ -197,18 +189,19 @@
             lastRestPing = 'N/A';
         })
         .finally(() => {
-            document.getElementById('latency').textContent = `Latency: REST: ${lastRestPing} ms`; // Uklonjen WS latency
+            document.getElementById('latency').textContent = `Latency: REST: ${lastRestPing} ms`;
         });
     }
 
     // Učitaj inicijalni status i ostale podatke kada se stranica učita
-    document.addEventListener('DOMContentLoaded', () => {
+    document.addEventListener('DOMContentLoaded', async () => {
         initChart();
-        updateUIFromRest(); // Pozovi funkciju za inicijalno učitavanje
+        await updateUIFromRest(); // Pozovi funkciju za inicijalno učitavanje
         setInterval(updateUIFromRest, 5000); // Ažuriraj svakih 5 sekundi
         setInterval(updateLatency, 5000);
     });
 
 </script>
+
 </body>
 </html>

@@ -6,8 +6,8 @@ import asyncio
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-import requests # Dodati import za requests
-from ChovusSmartBot_v9 import ChovusSmartBot, get_config, set_config, log_trade, log_score, cursor, conn # Uvezi potrebne funkcije i klase iz bota
+import requests # Uvezi requests za get_price ako je potrebno (mada get_price treba u bota)
+from ChovusSmartBot_v9 import ChovusSmartBot, get_config, set_config, get_all_config, cursor # Uvezi potrebne funkcije i klase, dodao cursor za trades
 
 load_dotenv()
 
@@ -16,11 +16,10 @@ print(f"🔑 Using API_KEY: {key}")
 
 app = FastAPI()
 
-# Postavi direktorijum gde su HTML fajlovi
-# AKO JE index.html U KORENU PROJEKTA, KORISTI directory="."
-# AKO JE U PODFOLDERU "html", KORISTI directory="html"
-# Prema tvom GitHubu, index.html je u korenu
-templates = Jinja2Templates(directory=".") # PROMENJENO OVO!
+# Postavi direktorijum gde su HTML fajlovi.
+# Prema GitHub strukturi, ako se main.py izvršava iz korena "first_bot"
+# a index.html je u "html" folderu, onda je ovo ispravno.
+templates = Jinja2Templates(directory="html")
 
 # Inicijalizuj bota
 bot = ChovusSmartBot()
@@ -43,85 +42,76 @@ async def read_root(request: Request):
 @app.post("/api/start")
 async def start_bot_endpoint():
     """Startuje bota."""
-    global bot_task
-    if bot_task is None or bot_task.done():
-        try:
-            await bot.start_bot() # Pozovi asinhronu metodu start_bot klase ChovusSmartBot
-            # bot.start_bot() unutra stvara asyncio.Task, ne treba nam ovde da ga čuvamo
-            return {"status": "Bot started"}
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to start bot: {e}")
-    return {"status": "Bot is already running"}
+    try:
+        await bot.start_bot()
+        return {"status": "Bot started"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start bot: {e}")
 
 @app.post("/api/stop")
 async def stop_bot_endpoint():
     """Zaustavlja bota."""
-    global bot_task
-    if bot.running: # Proveri status bota preko instance klase
-        try:
-            bot.stop_bot() # Ovo samo postavlja self.running = False, bot loop će reagovati
-            # Sačekaj da se bot zaista zaustavi, ako je potrebno (može biti kompleksno)
-            # Ako _bot_task postoji i nije done, možeš da ga čekaš.
-            if bot._bot_task and not bot._bot_task.done():
-                await bot._bot_task # Sačekaj da se glavni loop bota završi
-            return {"status": "Bot stopped"}
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to stop bot: {e}")
-    return {"status": "Bot is not running"}
+    try:
+        bot.stop_bot()
+        # Optional: Ako želiš da sačekaš da se glavna petlja bota zaista završi,
+        # treba ti mehanizam unutar bota da signalizira kraj taska.
+        # Npr. await bot._bot_main_task if bot._bot_main_task and not bot._bot_main_task.done() else None
+        return {"status": "Bot stopping (may take a moment to fully halt)"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to stop bot: {e}")
 
 @app.get("/api/status")
 async def get_bot_status_endpoint():
     """Vraća status bota."""
-    # Ispravno pozivanje metode bota za status
     return {"status": bot.get_bot_status()}
 
 @app.post("/api/restart")
 async def restart_bot_endpoint():
     """Restartuje bota."""
-    if bot.running:
-        bot.stop_bot()
-        if bot._bot_task and not bot._bot_task.done():
-            await bot._bot_task # Sačekaj da se zaustavi pre restarta
-    await bot.start_bot()
-    return {"status": "Bot restarted"}
+    try:
+        if bot.running:
+            bot.stop_bot()
+            # Mali delay da se trenutni ciklus završi pre novog starta
+            await asyncio.sleep(2)
+        await bot.start_bot()
+        return {"status": "Bot restarted"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to restart bot: {e}")
 
 @app.post("/api/set_strategy")
-async def set_strategy_endpoint(request: StrategyRequest): # Koristi Pydantic model
+async def set_strategy_endpoint(request: StrategyRequest):
     """Postavlja strategiju za bota."""
-    strategy_status = bot.set_bot_strategy(request.strategy_name) # Pozovi metodu na instanci bota
-    return {"status": f"Strategy set to: {strategy_status}"}
+    bot.set_bot_strategy(request.strategy_name)
+    return {"status": f"Strategy set to: {request.strategy_name}"}
 
-@app.get("/api/config") # Dodao sam prefix /api
-def get_config_api():
-    # Funkcija get_all_config mora biti definisana negde (može u bot fajlu)
-    # Ili se sve config funkcije moraju prebaciti u main.py ili koristiti bot instancu
-    from ChovusSmartBot_v9 import get_all_config # Privremeni import ako nije već globalno
+@app.get("/api/config")
+async def get_config_api():
     return get_all_config()
 
-@app.get("/api/balance") # Dodao sam prefix /api
-def get_balance():
+@app.get("/api/balance")
+async def get_balance_api():
+    # Uzmi najnovije vrednosti iz baze
     return {
-        "wallet_balance": get_config("balance", "0"),
-        "score": get_config("score", "0")
+        "wallet_balance": float(get_config("balance", "0")),
+        "score": int(get_config("score", "0"))
     }
 
-@app.get("/api/trades") # Dodao sam prefix /api
-def get_trades():
-    cursor.execute("SELECT symbol, price, timestamp FROM trades ORDER BY id DESC LIMIT 20")
-    return [{"symbol": s, "price": p, "time": t} for s, p, t in cursor.fetchall()]
+@app.get("/api/trades")
+async def get_trades_api():
+    # Preuzmi trejdove direktno iz baze
+    cursor.execute("SELECT symbol, price, timestamp, outcome FROM trades ORDER BY id DESC LIMIT 20")
+    return [{"symbol": s, "price": p, "time": t, "outcome": o} for s, p, t, o in cursor.fetchall()]
 
-@app.get("/api/pairs") # Dodao sam prefix /api
-def get_pairs():
-    return get_config("available_pairs", "").split(",")
+@app.get("/api/pairs")
+async def get_pairs_api():
+    pairs_str = get_config("available_pairs", "")
+    return pairs_str.split(",") if pairs_str else []
 
-@app.post("/api/send_telegram") # Dodao sam prefix /api
+@app.post("/api/send_telegram")
 async def send_telegram_endpoint(msg: TelegramMessage):
     # Pozovi metodu bota za slanje Telegram poruka
     return bot._send_telegram_message(msg.message)
 
-# OBAVEZNO: Ukloni sve while True petlje i blokirajući kod iz main.py
-# Npr. ukloni bot_loop, scan_top_pairs, update_db_pairs, send_report Thread, get_price itd.
-# Sve to treba da bude unutar ChovusSmartBot klase ili pomoćnih funkcija koje poziva bot.
 
-# Bot startuje samo na zahtev korisnika preko /api/start
-# Nema globalnog bot_state dictionary-ja u main.py, jer se stanje održava u instanci bota
+# Uklonjene sve blokirajuće while True petlje i funkcije iz main.py
+# Uklonjena referenca na bot_state jer se stanje održava u instanci bota
