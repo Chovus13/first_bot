@@ -176,6 +176,7 @@
         }
     }
 
+    <!-- U html/index.html, ažuriraj fetchSignals -->
     async function fetchSignals() {
         try {
             const response = await fetch('/api/signals');
@@ -183,9 +184,9 @@
             const signalsDiv = document.getElementById('signals');
             if (signals.length > 0 && signals[0].symbol !== "N/A") {
                 signalsDiv.innerHTML = '<h3>Signali:</h3>' + signals.map(s => `
-                    <p><strong>${s.symbol}</strong> | Cena: ${parseFloat(s.price).toFixed(4)} | Vreme: ${s.time}</p>
+                    <p><strong>${s.symbol}</strong> | Cena: ${parseFloat(s.price).toFixed(4)} | Vreme: ${s.time} | Tip: ${s.type}</p>
                 `).join('');
-                document.getElementById('latestSignal').textContent = `${signals[0].symbol} @ ${parseFloat(signals[0].price).toFixed(4)}`;
+                document.getElementById('latestSignal').textContent = `${signals[0].symbol} @ ${parseFloat(signals[0].price).toFixed(4)} (${signals[0].type})`;
             } else {
                 signalsDiv.innerHTML = '<p>Nema signala.</p>';
                 document.getElementById('latestSignal').textContent = 'N/A';

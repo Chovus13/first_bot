@@ -1,4 +1,5 @@
 # ChovusSmartBot_v9.py
+import logging
 import ccxt.async_support as ccxt
 import time
 import math
@@ -11,13 +12,29 @@ import threading
 import schedule
 import requests
 from pandas import DataFrame
-from typing import Optional, Union
+from typing import Optional, Union, Any
 from dotenv import load_dotenv
 import asyncio
 import sqlite3
 from pathlib import Path
 
 load_dotenv()
+
+# Podesi logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Ažuriraj log_action da ispisuje i na konzolu
+def log_action(message):
+    logger.info(message)  # Ispis na konzolu
+    with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
+        cursor = conn.cursor()
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("INSERT INTO bot_logs (timestamp, message) VALUES (?, ?)", (now, message))
+        conn.commit()
 
 # DB setup
 DB_PATH = Path(os.getenv("DB_PATH", Path(__file__).resolve().parent / "user_data" / "chovusbot.db"))
@@ -68,12 +85,31 @@ def log_score(score):
         cursor.execute("INSERT INTO score_log (timestamp, score) VALUES (?, ?)", (now, score))
         conn.commit()
 
+# U ChovusSmartBot_v9.py, popravljena metoda export_candidates_to_json i log_candidate
 def log_candidate(symbol, price, score):
     with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
         cursor = conn.cursor()
         now = time.strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("INSERT INTO candidates (timestamp, symbol, price, score) VALUES (?, ?, ?, ?)", (now, symbol, price, score))
         conn.commit()
+    export_candidates_to_json()  # Poziv bez argumenata
+
+# U ChovusSmartBot_v9.py, uklonjena suvišna definicija i zadržana ispravna verzija
+def export_candidates_to_json():
+    try:
+        log_action("Exporting candidates to JSON...")
+        with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT timestamp, symbol, price, score FROM candidates ORDER BY id DESC LIMIT 10")
+            candidates = [{"time": t, "symbol": s, "price": p, "score": sc} for t, s, p, sc in cursor.fetchall()]
+            json_path = DB_PATH.parent / "candidates.json"
+            log_action(f"Writing candidates to {json_path}")
+            with open(json_path, "w") as f:
+                json.dump(candidates, f, indent=2)
+            log_action("Candidates exported to JSON successfully.")
+    except Exception as e:
+        log_action(f"Error exporting candidates to JSON: {e}")
+
 
 def log_action(message):
     with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
@@ -178,7 +214,7 @@ class ChovusSmartBot:
         except Exception as e:
             log_action(f"Error analyzing history: {e}")
 
-    async def get_candles(self, symbol, timeframe='15m', limit=100):
+    async def get_candles(self, symbol, timeframe='15m', limit=100):  #ovaj korak kao i ai score-preskacem-proveriti PRE
         ohlcv = await self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         return df
@@ -216,50 +252,89 @@ class ChovusSmartBot:
                 return True
         return False
 
-    def ai_score(self, price, volume, avg_volume, crossover, in_fib_zone):
+    def ai_score(self, price, volume, avg_volume, crossover, in_fib_zone): #zapazanja i preporuke, kao
         score = 0
         if self.is_near_round(price): score += 1
         if volume > avg_volume * VOLUME_SPIKE_THRESHOLD: score += 1
-        if crossover: score += 1.5
-        if in_fib_zone: score += 0.5
+        if crossover: score += 1.2  # Smanjeno sa 1.5
+        if in_fib_zone: score += 0.8  # Povećano sa 0.5
         return min(score / 4.0, 1.0)
 
-    async def _scan_pairs(self, limit=5):
-        markets = await self.exchange.load_markets()
-        pairs = []
-        all_futures = [s for s in markets if s.endswith("/USDT") and markets[s].get('future', False)]
-        tickers = await self.exchange.fetch_tickers(all_futures)
-        for symbol in all_futures:
-            ticker = tickers.get(symbol)
-            if not ticker: continue
-            try:
-                volume = ticker.get('quoteVolume', 0)
-                price = ticker.get('last', 0)
-                if volume and price and price > 0:
-                    df = await self.get_candles(symbol)
-                    if len(df) < 150:
-                        log_action(f"Not enough data for {symbol}, skipping.")
-                        continue
-                    crossover = self.confirm_smma_wma_crossover(df)
-                    in_fib_zone = self.fib_zone_check(df)
-                    avg_volume = df['volume'].iloc[-50:].mean() if len(df) >= 50 else volume
-                    score = self.ai_score(price, volume, avg_volume, crossover, in_fib_zone)
-                    log_candidate(symbol, price, score)
-                    if score > 0.6:
-                        pairs.append((symbol, price, volume, score))
-                        log_action(f"Candidate found: {symbol} | Price: {price:.4f} | Score: {score:.2f}")
-            except Exception as e:
-                log_action(f"Error scanning {symbol}: {e}")
-        pairs.sort(key=lambda x: x[3], reverse=True)
-        return pairs[:limit]
 
-    def export_candidates_to_json(self):
-        with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT timestamp, symbol, price, score FROM candidates ORDER BY id DESC LIMIT 10")
-            candidates = [{"time": t, "symbol": s, "price": p, "score": sc} for t, s, p, sc in cursor.fetchall()]
-            with open(DB_PATH.parent / "candidates.json", "w") as f:
-                json.dump(candidates, f, indent=2)
+    # U ChovusSmartBot_v9.py, ažuriraj _scan_pairs sa dodatnim logovanjem
+    async def _scan_pairs(self, limit=5):
+        log_action("Starting pair scanning...")
+        try:
+            log_action("Loading markets...")
+            markets = await self.exchange.load_markets()
+            all_futures = [s for s in markets if s.endswith("/USDT") and markets[s].get('future', False)]
+            log_action(f"Found {len(all_futures)} futures pairs to scan: {all_futures[:5]}...")
+
+            if not all_futures:
+                log_action("No futures pairs found. Check API permissions or market data.")
+                return []
+
+            try:
+                log_action("Fetching tickers...")
+                tickers = await self.exchange.fetch_tickers(all_futures)
+                log_action(f"Fetched tickers for {len(tickers)} pairs.")
+            except Exception as e:
+                log_action(f"Error fetching tickers: {str(e)}")
+                return []
+
+            pairs = []
+            for symbol in all_futures:
+                ticker = tickers.get(symbol)
+                if not ticker:
+                    log_action(f"No ticker data for {symbol}, skipping.")
+                    continue
+                try:
+                    volume = ticker.get('quoteVolume', 0)
+                    price = ticker.get('last', 0)
+                    if volume and price and price > 0:
+                        log_action(f"Fetching candles for {symbol}...")
+                        df = await self.get_candles(symbol, timeframe='1h', limit=150)
+                        if len(df) < 150:
+                            log_action(f"Not enough data for {symbol} (candles: {len(df)}), skipping.")
+                            continue
+                        log_action(f"Calculating indicators for {symbol}...")
+                        crossover = self.confirm_smma_wma_crossover(df)
+                        in_fib_zone = self.fib_zone_check(df)
+                        avg_volume = df['volume'].iloc[-50:].mean() if len(df) >= 50 else volume
+                        score = self.ai_score(price, volume, avg_volume, crossover, in_fib_zone)
+                        log_action(
+                            f"Scanned {symbol} | Price: {price:.4f} | Volume: {volume:.2f} | Score: {score:.2f} | Crossover: {crossover} | Fib Zone: {in_fib_zone}")
+                        log_candidate(symbol, price, score)
+                        if score > 0.4:  # Smanjen sa 0.5 na 0.4 ##########################################
+                            pairs.append((symbol, price, volume, score))
+                            log_action(f"Candidate selected: {symbol} | Price: {price:.4f} | Score: {score:.2f}")
+                    else:
+                        log_action(f"Invalid ticker data for {symbol} | Price: {price} | Volume: {volume}")
+                except Exception as e:
+                    log_action(f"Error scanning {symbol}: {str(e)}")
+            pairs.sort(key=lambda x: x[3], reverse=True)
+            log_action(f"Scanning complete. Selected {len(pairs)} candidates.")
+            return pairs[:limit]
+        except Exception as e:
+            log_action(f"Error in pair scanning: {str(e)}")
+            return []
+
+    # U ChovusSmartBot_v9.py, uklonjena suvišna definicija i zadržana ispravna verzija
+    def export_candidates_to_json():
+        try:
+            log_action("Exporting candidates to JSON...")
+            with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT timestamp, symbol, price, score FROM candidates ORDER BY id DESC LIMIT 10")
+                candidates = [{"time": t, "symbol": s, "price": p, "score": sc} for t, s, p, sc in cursor.fetchall()]
+                json_path = DB_PATH.parent / "candidates.json"
+                log_action(f"Writing candidates to {json_path}")
+                with open(json_path, "w") as f:
+                    json.dump(candidates, f, indent=2)
+                log_action("Candidates exported to JSON successfully.")
+        except Exception as e:
+            log_action(f"Error exporting candidates to JSON: {e}")
+
 
     async def _monitor_trade(self, symbol, entry_price):
         log_action(f"Monitoring trade for {symbol} at entry {entry_price:.4f}")
@@ -298,28 +373,28 @@ class ChovusSmartBot:
             except Exception as e:
                 log_action(f"Error monitoring trade for {symbol}: {e}")
                 await asyncio.sleep(5)
-        if self.running:
-            log_action(f"Trade for {symbol} timed out.")
-            current_balance = float(get_config("balance", "0"))
-            current_score = int(get_config("score", "0"))
-            try:
-                ticker = await self.exchange.fetch_ticker(symbol)
-                current_price = ticker['last']
-                if current_price > entry_price:
-                    profit = (current_price - entry_price) * self.leverage
-                    set_config("balance", str(current_balance + profit))
-                    set_config("score", str(current_score + 0.5))
-                    log_trade(symbol, current_price, "TIMEOUT_PROFIT")
-                else:
-                    loss = (entry_price - current_price) * self.leverage
-                    set_config("balance", str(current_balance - loss))
-                    set_config("score", str(current_score - 0.5))
-                    log_trade(symbol, current_price, "TIMEOUT_LOSS")
-                await self._execute_sell_order(symbol, 'ALL')
-                return "TIMEOUT"
-            except Exception as e:
-                log_action(f"Error closing timed out trade for {symbol}: {e}")
-                return "ERROR_TIMEOUT"
+                if self.running:
+                    log_action(f"Trade for {symbol} timed out.")
+                    current_balance = float(get_config("balance", "0"))
+                    current_score = int(get_config("score", "0"))
+                try:
+                    ticker = await self.exchange.fetch_ticker(symbol)
+                    current_price = ticker['last']
+                    if current_price > entry_price:
+                        profit = (current_price - entry_price) * self.leverage
+                        set_config("balance", str(current_balance + profit))
+                        set_config("score", str(current_score + 0.5))
+                        log_trade(symbol, current_price, "TIMEOUT_PROFIT")
+                    else:
+                        loss = (entry_price - current_price) * self.leverage
+                        set_config("balance", str(current_balance - loss))
+                        set_config("score", str(current_score - 0.5))
+                        log_trade(symbol, current_price, "TIMEOUT_LOSS")
+                    await self._execute_sell_order(symbol, 'ALL')
+                    return "TIMEOUT"
+                except Exception as e:
+                    log_action(f"Error closing timed out trade for {symbol}: {e}")
+                    return "ERROR_TIMEOUT"
 
     async def _execute_buy_order(self, symbol, quantity):
         try:
@@ -330,6 +405,7 @@ class ChovusSmartBot:
             log_action(f"Error executing buy order for {symbol}: {e}")
             return None
 
+    # U ChovusSmartBot_v9.py, popravljene metode _execute_sell_order i _open_long
     async def _execute_sell_order(self, symbol, quantity):
         try:
             order = await self.exchange.create_market_sell_order(symbol, quantity)
@@ -362,6 +438,31 @@ class ChovusSmartBot:
         except Exception as e:
             log_action(f"Error opening long position for {symbol}: {e}")
             return None, None
+
+    # U ChovusSmartBot_v9.py, popravljena metoda _main_bot_loop
+    async def _main_bot_loop(self):
+        log_action("[BOT] Starting main bot loop...")
+        while self.running:
+            try:
+                log_action("Initiating pair scan...")
+                targets = await self._scan_pairs()
+                log_action(f"Found {len(targets)} high-score targets")
+                if targets:
+                    symbol, price, volume, score = targets[0]
+                    log_action(f"[BOT] Opening position on {symbol} with score {score:.2f}")
+                    order, entry_price = await self._open_long(symbol, score)
+                    if order:
+                        log_action(f"Position opened for {symbol} at {entry_price}")
+                        trade_outcome = await self._monitor_trade(symbol, entry_price)
+                        log_action(f"Trade for {symbol} finished with outcome: {trade_outcome}")
+                    else:
+                        log_action(f"Could not open position for {symbol}.")
+                else:
+                    log_action("No high-score targets found in this scan.")
+                await self.learn_from_history()
+            except Exception as ex:
+                log_action(f"Main bot loop error: {str(ex)}")
+            await asyncio.sleep(15)
 
     def _send_telegram_message(self, message):
         token = os.getenv('TELEGRAM_BOT_TOKEN')
