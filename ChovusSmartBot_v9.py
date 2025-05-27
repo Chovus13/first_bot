@@ -237,25 +237,27 @@ class ChovusSmartBot:
         if in_fib_zone: score += 0.5
         return min(score / 4.0, 1.0)
 
-    # U ChovusSmartBot_v9.py, ažuriraj _scan_pairs metodu
+    # U ChovusSmartBot_v9.py, ažuriraj _scan_pairs metodu  #sad je vec drui ili trteci put menjam,
     async def _scan_pairs(self, limit=5):
         log_action("Starting pair scanning...")
         try:
             markets = await self.exchange.load_markets()
-            pairs = []
             all_futures = [s for s in markets if s.endswith("/USDT") and markets[s].get('future', False)]
-            log_action(f"Found {len(all_futures)} futures pairs to scan.")
+            log_action(
+                f"Found {len(all_futures)} futures pairs to scan: {all_futures[:5]}...")  # Prikazuj prvih 5 parova
 
             if not all_futures:
                 log_action("No futures pairs found. Check API permissions or market data.")
-                return pairs
+                return []
 
             try:
                 tickers = await self.exchange.fetch_tickers(all_futures)
+                log_action(f"Fetched tickers for {len(tickers)} pairs.")
             except Exception as e:
                 log_action(f"Error fetching tickers: {e}")
-                return pairs
+                return []
 
+            pairs = []
             for symbol in all_futures:
                 ticker = tickers.get(symbol)
                 if not ticker:
@@ -265,7 +267,8 @@ class ChovusSmartBot:
                     volume = ticker.get('quoteVolume', 0)
                     price = ticker.get('last', 0)
                     if volume and price and price > 0:
-                        df = await self.get_candles(symbol)
+                        log_action(f"Fetching candles for {symbol}...")
+                        df = await self.get_candles(symbol, timeframe='1h', limit=150)  # Promenjen timeframe na 1h
                         if len(df) < 150:
                             log_action(f"Not enough data for {symbol} (candles: {len(df)}), skipping.")
                             continue
@@ -276,7 +279,7 @@ class ChovusSmartBot:
                         log_candidate(symbol, price, score)
                         log_action(
                             f"Scanned {symbol} | Price: {price:.4f} | Volume: {volume:.2f} | Score: {score:.2f} | Crossover: {crossover} | Fib Zone: {in_fib_zone}")
-                        if score > 0.6:
+                        if score > 0.5:  # Smanjen uslov sa 0.6 na 0.5
                             pairs.append((symbol, price, volume, score))
                             log_action(f"Candidate selected: {symbol} | Price: {price:.4f} | Score: {score:.2f}")
                     else:
