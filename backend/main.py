@@ -133,24 +133,41 @@ async def get_market_data(symbol: str = "ETH/BTC"):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching market data: {e}")
 
+# U main.py, ažuriraj /api/candidates
 @app.get("/api/candidates")
 async def get_candidates():
     try:
         with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT symbol, price, score, timestamp FROM candidates ORDER BY id DESC LIMIT 5")
+            cursor.execute("SELECT symbol, price, score, timestamp FROM candidates ORDER BY score DESC, id DESC LIMIT 10")
             return [{"symbol": s, "price": p, "score": sc, "time": t} for s, p, sc, t in cursor.fetchall()]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching candidates: {e}")
 
+# U main.py, ažuriraj /api/signals
 @app.get("/api/signals")
 async def get_signals():
     try:
+        signals = []
+        # Prvo proveri da li ima TP trejdova
         with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT symbol, price, timestamp FROM trades WHERE outcome = 'TP' ORDER BY id DESC LIMIT 5")
-            signals = [{"symbol": s, "price": p, "time": t} for s, p, t in cursor.fetchall()]
-            return signals if signals else [{"symbol": "N/A", "price": 0, "time": "N/A"}]
+            signals.extend([{"symbol": s, "price": p, "time": t, "type": "Trade (TP)"} for s, p, t in cursor.fetchall()])
+
+        # Ako nema TP trejdova, proveri kandidate za potencijalne signale
+        if not signals:
+            with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT symbol, price, score, timestamp FROM candidates WHERE score > 0.5 ORDER BY score DESC LIMIT 5")
+                candidates = cursor.fetchall()
+                for symbol, price, score, timestamp in candidates:
+                    df = await bot.get_candles(symbol)
+                    crossover = bot.confirm_smma_wma_crossover(df)
+                    in_fib_zone = bot.fib_zone_check(df)
+                    if crossover and in_fib_zone:
+                        signals.append({"symbol": symbol, "price": price, "time": timestamp, "type": "Potential (Crossover + Fib)"})
+        return signals if signals else [{"symbol": "N/A", "price": 0, "time": "N/A", "type": "N/A"}]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching signals: {e}")
 
