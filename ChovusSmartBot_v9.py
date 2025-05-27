@@ -290,13 +290,21 @@ class ChovusSmartBot:
             log_action(f"Scanning complete. Selected {len(pairs)} candidates.")
             return pairs[:limit]
 
-    def export_candidates_to_json(self):
-        with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT timestamp, symbol, price, score FROM candidates ORDER BY id DESC LIMIT 10")
-            candidates = [{"time": t, "symbol": s, "price": p, "score": sc} for t, s, p, sc in cursor.fetchall()]
-            with open(DB_PATH.parent / "candidates.json", "w") as f:
-                json.dump(candidates, f, indent=2)
+    # U ChovusSmartBot_v9.py, ažuriraj export_candidates_to_json
+    def export_candidates_to_json():
+        try:
+            log_action("Exporting candidates to JSON...")
+            with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT timestamp, symbol, price, score FROM candidates ORDER BY id DESC LIMIT 10")
+                candidates = [{"time": t, "symbol": s, "price": p, "score": sc} for t, s, p, sc in cursor.fetchall()]
+                json_path = DB_PATH.parent / "candidates.json"
+                log_action(f"Writing candidates to {json_path}")
+                with open(json_path, "w") as f:
+                    json.dump(candidates, f, indent=2)
+                log_action("Candidates exported to JSON successfully.")
+        except Exception as e:
+            log_action(f"Error exporting candidates to JSON: {e}")
 
     async def _monitor_trade(self, symbol, entry_price):
         log_action(f"Monitoring trade for {symbol} at entry {entry_price:.4f}")
