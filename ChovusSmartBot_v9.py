@@ -11,7 +11,7 @@ import threading
 import schedule
 import requests
 from pandas import DataFrame
-from typing import Optional, Union
+from typing import Optional, Union, Any
 from dotenv import load_dotenv
 import asyncio
 import sqlite3
@@ -77,16 +77,6 @@ def log_candidate(symbol, price, score):
         conn.commit()
     export_candidates_to_json()
 
-def export_candidates_to_json():
-    try:
-        with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT timestamp, symbol, price, score FROM candidates ORDER BY id DESC LIMIT 10")
-            candidates = [{"time": t, "symbol": s, "price": p, "score": sc} for t, s, p, sc in cursor.fetchall()]
-            with open(DB_PATH.parent / "candidates.json", "w") as f:
-                json.dump(candidates, f, indent=2)
-    except Exception as e:
-        log_action(f"Error exporting candidates to JSON: {e}")
 
 def log_action(message):
     with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
@@ -237,7 +227,6 @@ class ChovusSmartBot:
         if in_fib_zone: score += 0.5
         return min(score / 4.0, 1.0)
 
-    # U ChovusSmartBot_v9.py, ažuriraj _scan_pairs metodu  #sad je vec drui ili trteci put menjam,
     async def _scan_pairs(self, limit=5):
         log_action("Starting pair scanning...")
         try:
@@ -257,7 +246,7 @@ class ChovusSmartBot:
                 log_action(f"Error fetching tickers: {e}")
                 return []
 
-            pairs = []
+            pairs: Any = []
             for symbol in all_futures:
                 ticker = tickers.get(symbol)
                 if not ticker:
@@ -288,13 +277,13 @@ class ChovusSmartBot:
                     log_action(f"Error scanning {symbol}: {e}")
             pairs.sort(key=lambda x: x[3], reverse=True)
             log_action(f"Scanning complete. Selected {len(pairs)} candidates.")
-            return pairs[:limit]
+            return []
 
-    # U ChovusSmartBot_v9.py, ažuriraj export_candidates_to_json #SETI#SE permisije za 777 /user_data
-    def export_candidates_to_json():
+    # U ChovusSmartBot_v9.py, ažuriraj export_candidates_to_json
+    def export_candidates_to_json(self, time,symbol, price,score):
         try:
             log_action("Exporting candidates to JSON...")
-            with sqlite3.connect(DB_PATH, check_same_thread=False) as conn: ####EXPORT CANDFIDATE to json ima i 297 i gore 72
+            with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT timestamp, symbol, price, score FROM candidates ORDER BY id DESC LIMIT 10")
                 candidates = [{"time": t, "symbol": s, "price": p, "score": sc} for t, s, p, sc in cursor.fetchall()]
@@ -305,6 +294,7 @@ class ChovusSmartBot:
                 log_action("Candidates exported to JSON successfully.")
         except Exception as e:
             log_action(f"Error exporting candidates to JSON: {e}")
+
 
     async def _monitor_trade(self, symbol, entry_price):
         log_action(f"Monitoring trade for {symbol} at entry {entry_price:.4f}")
