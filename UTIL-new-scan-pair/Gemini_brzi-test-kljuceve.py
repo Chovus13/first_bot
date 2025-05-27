@@ -12,8 +12,8 @@ from dotenv import load_dotenv
 # --- Konfiguracija ---
 SYMBOL = "ETH/BTC"  # Koristimo ETHUSDT kao primer, prilagodi ako želiš ETH/BTC futures par
 LEVERAGE = 3
-API_KEY = os.getenv('API_KEY')  # Zamenite svojim API ključem
-API_SECRET = os.getenv('API_SECRET')  # Zamenite svojim API sekretom
+API_KEY = bcgSOi0aUFQdHOOOoPjPAfdAcDYqYYzNwkScFq67Uy7oljdcWnheThizKriHrKUy
+API_SECRET = 7x7tIdlptIcoGAhuKk6lnq35UugstIlmKxh03JqvigL63VBl3WJBOcfYyONMFK4P
 BASE_URL = "https://fapi.binance.com"
 WS_URL = "wss://fstream.binance.com/ws"
 

@@ -1,5 +1,6 @@
 # main.py
 from fastapi import FastAPI, Request, HTTPException
+import ccxt.async_support as ccxt
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -8,7 +9,9 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 import sqlite3
-from ChovusSmartBot_v9 import ChovusSmartBot, get_config, set_config, log_trade, log_score
+ChovusSmartBot_v9 import ChovusSmartBot, get_config, set_config
+
+
 
 load_dotenv()
 
@@ -40,16 +43,21 @@ class AmountRequest(BaseModel):
 async def read_root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
-@app.post("/api/start")
-async def start_bot_endpoint():
-    global bot_task
-    if bot_task is None or bot_task.done():
-        try:
-            await bot.start_bot()
-            return {"status": "Bot started"}
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to start bot: {e}")
-    return {"status": "Bot is already running"}
+
+
+async def start_bot(self):
+    if self.running:
+        log_action("Bot is already running.")
+        return
+    log_action("Bot starting...")
+    self.running = True
+    # Postavi leverage na početku (ako je potrebno)
+    await self.set_leverage(self.leverage)  # Dodat await jer je set_leverage sada async
+    self._bot_task = asyncio.create_task(self._main_bot_loop())
+    if self._telegram_report_thread is None or not self._telegram_report_thread.is_alive():
+        self._telegram_report_thread = threading.Thread(target=self._send_report_loop, daemon=True)
+        self._telegram_report_thread.start()
+    log_action("Bot started.")
 
 @app.post("/api/stop")
 async def stop_bot_endpoint():
@@ -133,6 +141,11 @@ async def get_market_data(symbol: str = "ETH/BTC"):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching market data: {e}")
 
+
+
+
+
+
 # U main.py, ažuriraj /api/candidates - polako
 @app.get("/api/candidates")
 async def get_candidates():
@@ -144,41 +157,66 @@ async def get_candidates():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching candidates: {e}")
 
+
+# @app.get("/api/signals")
+# async def get_signals():
+#     try:
+#         with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
+#             cursor = conn.cursor()
+#             cursor.execute("SELECT symbol, price, timestamp, outcome FROM trades ORDER BY timestamp DESC LIMIT 10")
+#             trades = cursor.fetchall()
+#             signals = [
+#                 {"symbol": t[0], "price": t[1], "time": t[2], "type": f"Trade ({t[3]})"}
+#                 for t in trades
+#             ]
+#             return signals
+#     except Exception as e:
+#         logger.error(f"Error in /api/signals: {str(e)}")
+#         return {"status": "error", "message": str(e)}
+
 # U main.py, ažuriraj /api/signals
+# U main.py, ažuriraj /api/signals endpoint
+# @app.get("/api/signals")
+# async def get_signals():
+# try:
+#     with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
+#         cursor = conn.cursor()
+#         cursor.execute("SELECT symbol, price, timestamp, outcome FROM trades ORDER BY timestamp DESC LIMIT 10")
+#         trades = cursor.fetchall()
+#         signals = [
+#             {"symbol": t[0], "price": t[1], "time": t[2], "type": f"Trade ({t[3]})"}
+#             for t in trades
+#         ]
+#         return signals
+# except Exception as e:
+#     logger.error(f"Error in /api/signals: {str(e)}")  # Pretpostavljam da imaš logger
+#     return {"status": "error", "message": str(e)}
+
+# U ChovusSmartBot_v9.py, ažuriraj set_leverage
+
 @app.get("/api/signals")
 async def get_signals():
     try:
-        signals = []
-        # Prvo proveri da li ima TP trejdova
         with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT symbol, price, timestamp FROM trades WHERE outcome = 'TP' ORDER BY id DESC LIMIT 5")
-            signals.extend([{"symbol": s, "price": p, "time": t, "type": "Trade (TP)"} for s, p, t in cursor.fetchall()])
-
-        # Ako nema TP trejdova, proveri kandidate za potencijalne signale
-        if not signals:
-            with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT symbol, price, score, timestamp FROM candidates WHERE score > 0.5 ORDER BY score DESC LIMIT 5")
-                candidates = cursor.fetchall()
-                for symbol, price, score, timestamp in candidates:
-                    df = await bot.get_candles(symbol)
-                    crossover = bot.confirm_smma_wma_crossover(df)
-                    in_fib_zone = bot.fib_zone_check(df)
-                    if crossover and in_fib_zone:
-                        signals.append({"symbol": symbol, "price": price, "time": timestamp, "type": "Potential (Crossover + Fib)"})
-        return signals if signals else [{"symbol": "N/A", "price": 0, "time": "N/A", "type": "N/A"}]
+            cursor.execute("SELECT symbol, price, timestamp, outcome FROM trades ORDER BY timestamp DESC LIMIT 10")
+            trades = cursor.fetchall()
+            signals = [
+                {"symbol": t[0], "price": t[1], "time": t[2], "type": f"Trade ({t[3]})"}
+                for t in trades
+            ]
+            return signals
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching signals: {e}")
+        logger.error(f"Error in /api/signals: {str(e)}")  # Pretpostavljam da imaš logger
+        return {"status": "error", "message": str(e)}
 
-@app.post("/api/set_leverage")
-async def set_leverage(request: LeverageRequest):
+async def set_leverage(self, leverage: int):  # Dodat async
+    self.leverage = leverage
+    log_action(f"Leverage set to: {leverage}x")
     try:
-        bot.set_leverage(request.leverage)
-        set_config("leverage", str(request.leverage))
-        return {"status": f"Leverage set to: {request.leverage}x"}
+        await self.exchange.set_leverage(leverage, symbol=None)  # Dodat await
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error setting leverage: {e}")
+        log_action(f"Error setting leverage: {e}")
 
 @app.post("/api/set_manual_amount")
 async def set_manual_amount(request: AmountRequest):
@@ -205,3 +243,12 @@ async def export_candidates():
     from ChovusSmartBot_v9 import export_candidates_to_json
     export_candidates_to_json()
     return {"status": "Export triggered"}
+
+@app.get("/api/test_scan")
+async def test_scan():
+    try:
+        bot = ChovusSmartBot()  # Pretpostavljam da je bot globalna instanca
+        targets = await bot._scan_pairs()
+        return {"status": "Scan completed", "targets": targets}
+    except Exception as e:
+        return {"status": "Error", "message": str(e)}
