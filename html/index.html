@@ -1,3 +1,4 @@
+<!-- html/index.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -11,13 +12,14 @@
         header h1 { margin: 0; font-size: 24px; }
         #latency { font-size: 14px; }
         .container { flex: 1; padding: 20px; display: flex; flex-direction: column; gap: 20px; }
-        .controls { display: flex; gap: 10px; flex-wrap: wrap; }
+        .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
         .controls button { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }
         .controls button:hover { background-color: #0056b3; }
+        .controls input, .controls select { padding: 8px; border-radius: 5px; border: 1px solid #ccc; }
         .status { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; background-color: white; padding: 20px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
         .status div { font-size: 16px; }
         .chart-container { background-color: white; padding: 20px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); height: 300px; }
-        .signals { background-color: white; padding: 20px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); max-height: 200px; overflow-y: auto; }
+        .signals, .candidates, .logs { background-color: white; padding: 20px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); max-height: 200px; overflow-y: auto; }
         footer { background-color: #333; color: white; padding: 10px; text-align: center; font-size: 14px; }
         @media (max-width: 768px) { .container { padding: 10px; } .status { grid-template-columns: 1fr; } .chart-container { height: 200px; } }
     </style>
@@ -25,7 +27,7 @@
 <body>
 <header>
     <h1>PsyBot Control Panel</h1>
-    <div id="latency">Latency: REST: N/A ms | WS: N/A ms</div>
+    <div id="latency">Latency: REST: N/A ms</div>
 </header>
 <div class="container">
     <div class="controls">
@@ -33,34 +35,46 @@
         <button onclick="stopBot()">Stop Bot</button>
         <button onclick="getBotStatus()">Get Status</button>
         <button onclick="restartBot()">Restart Bot</button>
-
         <label for="strategySelect">Izaberi strategiju:</label>
         <select id="strategySelect">
             <option value="RSI">RSI</option>
             <option value="SMA">SMA</option>
             <option value="DCA">DCA</option>
-            <option value="Default">Default</option> </select>
+            <option value="Default">Default</option>
+        </select>
         <button onclick="setStrategyFromSelect()">⚙️ Primeni strategiju</button>
+        <label for="leverageInput">Leverage:</label>
+        <input type="number" id="leverageInput" min="1" max="100" value="10">
+        <button onclick="setLeverage()">Set Leverage</button>
+        <label for="amountInput">Manual Amount (USDT):</label>
+        <input type="number" id="amountInput" min="0" step="0.01" value="0">
+        <button onclick="setManualAmount()">Set Amount</button>
         <div id="status">Status će biti prikazan ovde.</div>
     </div>
-
     <div class="status">
         <div>Price: <span id="price">N/A</span> ETH/BTC</div>
         <div>Support: <span id="support">0</span></div>
         <div>Resistance: <span id="resistance">0</span></div>
         <div>Trend: <span id="trend">N/A</span></div>
-        <div>Balance: <span id="balance">N/A</span> <span id="balanceCurrency">USDT</span></div> <div>Strategija: <span id="strategija">off</span></div>
+        <div>Balance: <span id="balance">N/A</span> <span id="balanceCurrency">USDT</span></div>
+        <div>Strategija: <span id="strategija">off</span></div>
+        <div>Leverage: <span id="leverage">10x</span></div>
     </div>
     <div class="trades" id="trades">
         <p>Aktivni trejdovi: Nema</p>
     </div>
-
+    <div class="candidates" id="candidates">
+        <p>Kandidati za trejd: Nema</p>
+    </div>
+    <div class="signals" id="signals">
+        <p>Nema signala</p>
+    </div>
+    <div class="logs" id="logs">
+        <p>Logovi: Nema</p>
+    </div>
 </div>
 <div class="chart-container">
     <canvas id="orderbookChart"></canvas>
-</div>
-<div class="signals" id="signals">
-    <p>Nema signala</p>
 </div>
 <footer>
     <p>Bot Status: <span id="botStatus">Disconnected</span> | Latest Signal: <span id="latestSignal">N/A</span></p>
@@ -69,12 +83,7 @@
 <script>
     const statusDiv = document.getElementById('status');
     let chart = null;
-    let lastRestPing = 0;
-    let lastWsPing = 0;
-    let lastWsPong = 0;
-    let wsPingStart = 0;
 
-    // Funkcija za slanje komandi (GET i POST)
     async function sendCommand(endpoint, method = 'GET', body = null) {
         const options = { method: method };
         if (body) {
@@ -84,8 +93,8 @@
         try {
             const response = await fetch(endpoint, options);
             const data = await response.json();
-            alert(data.status || data.message); // Prikaz statusa iz odgovora
-            fetchStatus(); // Uvek ažuriraj status bota nakon akcije
+            alert(data.status || data.message);
+            fetchStatus();
         } catch (error) {
             console.error(`Error with ${method} ${endpoint}:`, error);
             alert(`Greška: ${error.message || error}`);
@@ -96,8 +105,9 @@
         try {
             const response = await fetch('/api/status');
             const data = await response.json();
-            statusDiv.innerText = `Bot Status: ${data.status}`;
-            document.getElementById('botStatus').textContent = data.status; // Ažuriraj footer status
+            statusDiv.innerText = `Bot Status: ${data.status} | Strategy: ${data.strategy}`;
+            document.getElementById('botStatus').textContent = data.status;
+            document.getElementById('strategija').textContent = data.strategy;
         } catch (error) {
             console.error('Error fetching status:', error);
             statusDiv.innerText = 'Error fetching status.';
@@ -110,12 +120,9 @@
             const balanceResponse = await fetch('/api/balance');
             const balanceData = await balanceResponse.json();
             document.getElementById('balance').textContent = parseFloat(balanceData.wallet_balance).toFixed(2);
-            // Strategija status mora da se vrati iz /api/status ili nekog drugog API-ja
-            // Trenutno bot.get_bot_status() ne vraća strategiju, pa će ovo biti N/A
-            // Za strategiju ti treba poseban endpoint, ili da status endpoint vrati i strategiju
-            // Privremeno, pretpostaviću da strategiju dobijaš samo iz inputa
+            document.getElementById('leverage').textContent = `${get_config('leverage', '10')}x`;
         } catch (error) {
-            console.error('Error fetching balance or strategy:', error);
+            console.error('Error fetching balance or leverage:', error);
         }
     }
 
@@ -126,30 +133,103 @@
             const tradesDiv = document.getElementById('trades');
             if (trades.length > 0) {
                 tradesDiv.innerHTML = '<h3>Poslednji Trejdovi:</h3>' + trades.map(trade => `
-                    <p><strong>${trade.symbol}</strong> | Cena: ${parseFloat(trade.price).toFixed(4)} | Vreme: ${trade.time}</p>
+                    <p><strong>${trade.symbol}</strong> | Cena: ${parseFloat(trade.price).toFixed(4)} | Vreme: ${trade.time} | Ishod: ${trade.outcome}</p>
                 `).join('');
             } else {
                 tradesDiv.innerHTML = '<p>Nema trejdova u bazi.</p>';
             }
         } catch (error) {
             console.error('Error fetching trades:', error);
-            document.getElementById('trades').innerHTML = '<p>Greška pri učitavanju trejdova.</p>';
+            tradesDiv.innerHTML = '<p>Greška pri učitavanju trejdova.</p>';
         }
     }
 
+    async function fetchMarketData() {
+        try {
+            const response = await fetch('/api/market_data?symbol=ETH/BTC');
+            const data = await response.json();
+            document.getElementById('price').textContent = parseFloat(data.price).toFixed(4);
+            document.getElementById('support').textContent = parseFloat(data.support).toFixed(4);
+            document.getElementById('resistance').textContent = parseFloat(data.resistance).toFixed(4);
+            document.getElementById('trend').textContent = data.trend;
+            updateChart(data);
+        } catch (error) {
+            console.error('Error fetching market data:', error);
+        }
+    }
+
+    async function fetchCandidates() {
+        try {
+            const response = await fetch('/api/candidates');
+            const candidates = await response.json();
+            const candidatesDiv = document.getElementById('candidates');
+            if (candidates.length > 0) {
+                candidatesDiv.innerHTML = '<h3>Kandidati za trejd:</h3>' + candidates.map(c => `
+                    <p><strong>${c.symbol}</strong> | Cena: ${parseFloat(c.price).toFixed(4)} | Score: ${parseFloat(c.score).toFixed(2)}</p>
+                `).join('');
+            } else {
+                candidatesDiv.innerHTML = '<p>Nema kandidata za trejd.</p>';
+            }
+        } catch (error) {
+            console.error('Error fetching candidates:', error);
+            candidatesDiv.innerHTML = '<p>Greška pri učitavanju kandidata.</p>';
+        }
+    }
+
+    async function fetchSignals() {
+        try {
+            const response = await fetch('/api/signals');
+            const signals = await response.json();
+            const signalsDiv = document.getElementById('signals');
+            if (signals.length > 0 && signals[0].symbol !== "N/A") {
+                signalsDiv.innerHTML = '<h3>Signali:</h3>' + signals.map(s => `
+                    <p><strong>${s.symbol}</strong> | Cena: ${parseFloat(s.price).toFixed(4)} | Vreme: ${s.time}</p>
+                `).join('');
+                document.getElementById('latestSignal').textContent = `${signals[0].symbol} @ ${parseFloat(signals[0].price).toFixed(4)}`;
+            } else {
+                signalsDiv.innerHTML = '<p>Nema signala.</p>';
+                document.getElementById('latestSignal').textContent = 'N/A';
+            }
+        } catch (error) {
+            console.error('Error fetching signals:', error);
+            signalsDiv.innerHTML = '<p>Greška pri učitavanju signala.</p>';
+        }
+    }
+
+    async function fetchLogs() {
+        try {
+            const response = await fetch('/api/logs');
+            const logs = await response.json();
+            const logsDiv = document.getElementById('logs');
+            if (logs.length > 0) {
+                logsDiv.innerHTML = '<h3>Logovi:</h3>' + logs.map(log => `
+                    <p>${log.time}: ${log.message}</p>
+                `).join('');
+            } else {
+                logsDiv.innerHTML = '<p>Nema logova.</p>';
+            }
+        } catch (error) {
+            console.error('Error fetching logs:', error);
+            logsDiv.innerHTML = '<p>Greška pri učitavanju logova.</p>';
+        }
+    }
 
     function startBot() { sendCommand('/api/start', 'POST'); }
     function stopBot() { sendCommand('/api/stop', 'POST'); }
-    function getBotStatus() { fetchStatus(); } // Ovo je već GET, samo poziva fetchStatus
+    function getBotStatus() { fetchStatus(); }
     function restartBot() { sendCommand('/api/restart', 'POST'); }
-
     function setStrategyFromSelect() {
         const strategyName = document.getElementById('strategySelect').value;
         sendCommand('/api/set_strategy', 'POST', { strategy_name: strategyName });
     }
-
-    // Nije ti potreban websocket jer nemaš ws rute u main.py
-    // Uklonio sam ws logiku. Ako želiš WebSocket, moraš ga implementirati u main.py
+    function setLeverage() {
+        const leverage = document.getElementById('leverageInput').value;
+        sendCommand('/api/set_leverage', 'POST', { leverage: parseInt(leverage) });
+    }
+    function setManualAmount() {
+        const amount = document.getElementById('amountInput').value;
+        sendCommand('/api/set_manual_amount', 'POST', { amount: parseFloat(amount) });
+    }
 
     function initChart() {
         const ctx = document.getElementById('orderbookChart').getContext('2d');
@@ -157,6 +237,7 @@
             type: 'line',
             data: {
                 datasets: [
+                    { label: 'Price', data: [], borderColor: 'blue', fill: false },
                     { label: 'Support', data: [], borderColor: 'green', fill: false, stepped: true },
                     { label: 'Resistance', data: [], borderColor: 'red', fill: false, stepped: true }
                 ]
@@ -165,50 +246,53 @@
                 responsive: true,
                 maintainAspectRatio: false,
                 scales: {
-                    x: { type: 'linear', position: 'bottom', title: { display: true, text: 'Price' } }, // Promeni tekst u 'Price'
-                    y: { title: { display: true, text: 'Volume' } }
+                    x: { type: 'linear', position: 'bottom', title: { display: true, text: 'Time' } },
+                    y: { title: { display: true, text: 'Price' } }
                 }
             }
         });
     }
 
-    // Funkcija za ažuriranje UI-ja (podaci sada dolaze iz REST API poziva)
+    function updateChart(data) {
+        const now = Date.now();
+        chart.data.datasets[0].data.push({ x: now, y: data.price });
+        chart.data.datasets[1].data.push({ x: now, y: data.support });
+        chart.data.datasets[2].data.push({ x: now, y: data.resistance });
+        if (chart.data.datasets[0].data.length > 50) {
+            chart.data.datasets.forEach(dataset => dataset.data.shift());
+        }
+        chart.update();
+    }
+
     async function updateUIFromRest() {
-        // Možeš dodati više REST API poziva ovde da dobiješ sve podatke
-        // Trenutno imamo samo status, balance i trades
         await fetchStatus();
         await fetchBalanceAndStrategy();
         await fetchTrades();
-        // Ostali podaci kao price, support, resistance, trend, signals, active_trades
-        // moraju imati svoje API endpointe u main.py i biti pozivani ovde.
-        // Npr. await fetchPriceData(); await fetchSignals();
+        await fetchMarketData();
+        await fetchCandidates();
+        await fetchSignals();
+        await fetchLogs();
     }
-
 
     function updateLatency() {
         const startRest = Date.now();
         fetch('/api/status')
-        .then(response => {
-            lastRestPing = Date.now() - startRest;
-            return response.json();
-        })
-        .catch(error => {
-            console.error('REST API error:', error);
-            lastRestPing = 'N/A';
-        })
-        .finally(() => {
-            document.getElementById('latency').textContent = `Latency: REST: ${lastRestPing} ms`; // Uklonjen WS latency
-        });
+            .then(response => {
+                const latency = Date.now() - startRest;
+                document.getElementById('latency').textContent = `Latency: REST: ${latency} ms`;
+            })
+            .catch(error => {
+                console.error('REST API error:', error);
+                document.getElementById('latency').textContent = 'Latency: REST: N/A ms';
+            });
     }
 
-    // Učitaj inicijalni status i ostale podatke kada se stranica učita
     document.addEventListener('DOMContentLoaded', () => {
         initChart();
-        updateUIFromRest(); // Pozovi funkciju za inicijalno učitavanje
-        setInterval(updateUIFromRest, 5000); // Ažuriraj svakih 5 sekundi
+        updateUIFromRest();
+        setInterval(updateUIFromRest, 5000);
         setInterval(updateLatency, 5000);
     });
-
 </script>
 </body>
 </html>

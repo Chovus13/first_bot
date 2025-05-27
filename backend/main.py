@@ -1,19 +1,14 @@
-from fastapi import FastAPI, Request
+# main.py
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-import asyncio
 from pydantic import BaseModel
-import os, sqlite3, time
+import asyncio
+import os
 from pathlib import Path
 from dotenv import load_dotenv
-# from fastapi.staticfiles import StaticFiles
-# from fastapi.responses import FileResponse
-from threading import Thread
-import ccxt
-from datetime import datetime
-import requests # Dodao sam requests, jer je falio iako se koristi
-
-from ChovusSmartBot_v9 import ChovusSmartBot  # Pretpostavljam da je klasa tako nazvana
+import sqlite3
+from ChovusSmartBot_v9 import ChovusSmartBot, get_config, set_config, log_trade, log_score
 
 load_dotenv()
 
@@ -21,226 +16,168 @@ key = os.getenv("API_KEY", "")[:4] + "..." + os.getenv("API_KEY", "")[-4:]
 print(f"🔑 Using API_KEY: {key}")
 
 app = FastAPI()
-templates = Jinja2Templates(directory="/app/html")  # Postavi direktorijum gde su HTML fajlovi
+templates = Jinja2Templates(directory="html")
+DB_PATH = Path(os.getenv("DB_PATH", Path(__file__).resolve().parent / "user_data" / "chovusbot.db"))
 
-# === Baza ===
-DB_PATH = Path(os.getenv("DB_PATH", Path(__file__).resolve().parents[1] / "user_data" / "chovusbot.db"))
+# Inicijalizuj bota
+bot = ChovusSmartBot()
+bot_task = None
 
-# Globalna konekcija, ali ćemo kursor kreirati za svaku operaciju
-# Bitno je da konekcija bude dostupna, ali kursor ne sme biti deljen
-conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-
-# Inicijalizacija tabele (ovo može i dalje koristiti privremeni kursor)
-with conn:
-    cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT, price REAL, timestamp TEXT)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS score_log (timestamp TEXT, score INTEGER)''')
-    conn.commit()
-
-
-def get_config(key: str, default=None):
-    with conn: # Koristi 'with' za automatski commit/rollback i za kursor
-        cursor = conn.cursor()
-        cursor.execute("SELECT value FROM config WHERE key=?", (key,))
-        result = cursor.fetchone()
-        return result[0] if result else default
-
-def set_config(key: str, value: str):
-    with conn:
-        cursor = conn.cursor()
-        cursor.execute("REPLACE INTO config (key, value) VALUES (?, ?)", (key, value))
-        conn.commit()
-
-def get_all_config():
-    with conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT key, value FROM config")
-        return {k: v for k, v in cursor.fetchall()}
-
-# === SCAN USDT FUTURES ===
-def scan_top_pairs(limit=3):
-    try:
-        exchange = ccxt.binance({"options": {"defaultType": "future"}})
-        print(f"[{datetime.now()}] Scanning top {limit} USDT Futures pairs...")
-        exchange.load_markets()
-        tickers = exchange.fetch_tickers()
-        futures = [s for s in exchange.markets if s.endswith("/USDT") and exchange.markets[s].get('contract', False)]
-        sorted_by_volume = sorted(
-            [(s, tickers[s]['quoteVolume']) for s in futures if 'quoteVolume' in tickers[s]],
-            key=lambda x: x[1],
-            reverse=True
-        )
-        top = [s[0] for s in sorted_by_volume[:limit]]
-        return top
-    except Exception as e:
-        print(f"❌ Error while scanning pairs: {e}")
-        return []
-
-def update_db_pairs(pairs):
-    set_config("available_pairs", ",".join(pairs))
-
-# === API modeli ===
+# API modeli
 class TelegramMessage(BaseModel):
     message: str
 
-@app.get("/api/status")
-async def get_bot_status_endpoint():
-    """Vraća status bota."""
-    return {"status": bot.get_bot_status()}  # Pretpostavljam da je get_bot_status sync
+class StrategyRequest(BaseModel):
+    strategy_name: str
 
+class LeverageRequest(BaseModel):
+    leverage: int
+
+class AmountRequest(BaseModel):
+    amount: float
+
+@app.get("/", response_class=HTMLResponse)
+async def read_root(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.post("/api/start")
+async def start_bot_endpoint():
+    global bot_task
+    if bot_task is None or bot_task.done():
+        try:
+            await bot.start_bot()
+            return {"status": "Bot started"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to start bot: {e}")
+    return {"status": "Bot is already running"}
 
 @app.post("/api/stop")
 async def stop_bot_endpoint():
-    """Zaustavlja bota."""
     global bot_task
-    if bot_task and not bot_task.done():
-        bot.stop_bot()  # Pretpostavljam da stop_bot ima logiku za zaustavljanje
-        await bot_task  # Sačekaj da se task završi
-        bot_task = None
-        return {"status": "Bot stopped"}
+    if bot.running:
+        try:
+            bot.stop_bot()
+            if bot._bot_task and not bot._bot_task.done():
+                await bot._bot_task
+            return {"status": "Bot stopped"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to stop bot: {e}")
     return {"status": "Bot is not running"}
+
+@app.get("/api/status")
+async def get_bot_status_endpoint():
+    return {"status": bot.get_bot_status(), "strategy": bot.current_strategy}
+
+@app.post("/api/restart")
+async def restart_bot_endpoint():
+    if bot.running:
+        bot.stop_bot()
+        if bot._bot_task and not bot._bot_task.done():
+            await bot._bot_task
+    await bot.start_bot()
+    return {"status": "Bot restarted"}
+
+@app.post("/api/set_strategy")
+async def set_strategy_endpoint(request: StrategyRequest):
+    strategy_status = bot.set_bot_strategy(request.strategy_name)
+    return {"status": f"Strategy set to: {strategy_status}"}
 
 @app.get("/api/config")
 def get_config_api():
     return get_all_config()
 
-
-@app.post("/api/restart")
-async def restart_bot_endpoint():
-    """Restartuje bota."""
-    global bot_task
-    if bot_task and not bot_task.done():
-        bot.stop_bot()
-        await bot_task
-        bot_task = None
-    bot_task = asyncio.create_task(bot.start_bot())
-    return {"status": "Bot restarted"}
-
-
-@app.post("/api/set_strategy")
-async def set_strategy_endpoint(strategy_name: str):  # Primer, prilagodi ako treba više parametara
-    """Postavlja strategiju za bota."""
-    bot.set_bot_strategy(strategy_name)  # Pretpostavljam da set_bot_strategy prima strategiju
-    return {"status": f"Strategy set to: {strategy_name}"}
-
-@app.get("/api/balance") # Promenjeno iz /balance u /api/balance
+@app.get("/api/balance")
 def get_balance():
-    # Ovde se poziva get_config, koji sada koristi svoj kursor, rešavajući problem
     return {
         "wallet_balance": get_config("balance", "0"),
         "score": get_config("score", "0")
     }
 
-@app.get("/api/trades") # Promenjeno iz /trades u /api/trades
+@app.get("/api/trades")
 def get_trades():
-    with conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT symbol, price, timestamp FROM trades ORDER BY id DESC LIMIT 20")
-        return [{"symbol": s, "price": p, "time": t} for s, p, t in cursor.fetchall()]
+    try:
+        with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT symbol, price, timestamp, outcome FROM trades ORDER BY id DESC LIMIT 20")
+            return [{"symbol": s, "price": p, "time": t, "outcome": o} for s, p, t, o in cursor.fetchall()]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching trades: {e}")
 
-@app.get("/api/pairs") # Promenjeno iz /pairs u /api/pairs
+@app.get("/api/pairs")
 def get_pairs():
     return get_config("available_pairs", "").split(",")
 
-@app.post("/api/send_telegram") # Promenjeno iz /send_telegram u /api/send_telegram
-def send_telegram(msg: TelegramMessage):
-    token = os.getenv('TELEGRAM_TOKEN')
-    chat_id = os.getenv('TELEGRAM_CHAT_ID')
-    if not token or not chat_id:
-        return {"status": "❌ Missing token or chat_id in .env"}
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    data = {"chat_id": chat_id, "text": msg.message}
-    r = requests.post(url, data=data)
-    return {"status": "✅ Sent!" if r.status_code == 200 else f"❌ Error: {r.text}"}
+@app.post("/api/send_telegram")
+async def send_telegram_endpoint(msg: TelegramMessage):
+    return bot._send_telegram_message(msg.message)
 
-
-# Inicijalizuj bota
-bot = ChovusSmartBot()
-bot_task = None  # Za čuvanje asyncio taska bota
-
-
-@app.get("/", response_class=HTMLResponse)
-async def read_root(request: Request):
-    """Prikazuje index.html stranicu."""
-    return templates.TemplateResponse("index.html", {"request": request})
-
-
-# --- API Endpoints za upravljanje botom ---
-
-@app.post("/api/start")
-async def start_bot_endpoint():
-    """Startuje bota."""
-    global bot_task
-    if bot_task is None or bot_task.done():
-        bot_task = asyncio.create_task(bot.start_bot())  # Pretpostavljam da je start_bot async
-        return {"status": "Bot started"}
-    return {"status": "Bot is already running"}
-
-@app.post("/api/pause") # Promenjeno iz /pause u /api/pause
-def pause_bot():
-    # bot_state["running"] = False # Ova varijabla nije definisana, koristi bot.is_running
-    bot.stop_bot() # Koristi metodu bota za pauziranje/zaustavljanje
-    return {"message": "⏸️ Bot paused."}
-
-# === Logika trejda ===
-def log_trade(symbol, price):
-    now = time.strftime("%Y-%m-%d %H:%M:%S")
-    with conn:
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO trades (symbol, price, timestamp) VALUES (?, ?, ?)", (symbol, price, now))
-        conn.commit()
-
-def log_score(score):
-    now = time.strftime("%Y-%m-%d %H:%M:%S")
-    with conn:
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO score_log (timestamp, score) VALUES (?, ?)", (now, score))
-        conn.commit()
-
-def bot_loop():
-    while bot.is_running(): # Koristi metodu bota za proveru statusa
-        pairs = get_config("available_pairs", "").split(",")
-        for symbol in pairs:
-            if not symbol.strip():
-                continue
-            try:
-                print(f"🤖 Checking {symbol} ...")
-                price_data = get_price(symbol)
-                print(f"📈 Price data: {price_data}")
-                price = price_data["price"]
-                if price != "N/A":
-                    log_trade(symbol, price)
-                    log_score(int(get_config("score", "0")) + 1)
-                    set_config("balance", str(float(get_config("balance", "0")) + 5))
-                    set_config("score", str(int(get_config("score", "0")) + 1))
-            except Exception as e:
-                print(f"🔥 Crash while processing {symbol}: {e}")
-        time.sleep(15)
-
-@app.get("/api/price") # Promenjeno iz /api/price
-def get_price(symbol: str):
+@app.get("/api/market_data")
+async def get_market_data(symbol: str = "ETH/BTC"):
     try:
-        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol.replace('/', '')}"
-        response = requests.get(url)
-        data = response.json()
-        if "price" in data:
-            return {"symbol": symbol, "price": float(data["price"])}
-        else:
-            return {"symbol": symbol, "price": "N/A"}
+        ticker = await bot.exchange.fetch_ticker(symbol)
+        df = await bot.get_candles(symbol)
+        high = df['high'].rolling(50).max().iloc[-1]
+        low = df['low'].rolling(50).min().iloc[-1]
+        fib_range = high - low
+        support = high - fib_range * 0.618
+        resistance = high - fib_range * 0.382
+        smma = bot.calc_smma(df['close'], 5)
+        wma = bot.calc_wma(df['close'], 144)
+        trend = "Bullish" if smma.iloc[-1] > wma.iloc[-1] else "Bearish"
+        return {
+            "price": ticker['last'],
+            "support": support,
+            "resistance": resistance,
+            "trend": trend
+        }
     except Exception as e:
-        print(f"❌ get_price error for {symbol}: {e}")
-        return {"symbol": symbol, "price": "N/A"}
+        raise HTTPException(status_code=500, detail=f"Error fetching market data: {e}")
 
+@app.get("/api/candidates")
+async def get_candidates():
+    try:
+        with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT symbol, price, score, timestamp FROM candidates ORDER BY id DESC LIMIT 5")
+            return [{"symbol": s, "price": p, "score": sc, "time": t} for s, p, sc, t in cursor.fetchall()]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching candidates: {e}")
 
-# === Telegram izveštaj ===
-def send_report():
-    while True:
-        now = time.strftime("%H:%M")
-        if now == get_config("report_time", "09:00"):
-            msg = f"📊 ChovusBot Report:\nWallet = {get_config('balance', '0')}, Score = {get_config('score', '0')}"
-            send_telegram(TelegramMessage(message=msg))
-            time.sleep(60)
-        time.sleep(30)
+@app.get("/api/signals")
+async def get_signals():
+    try:
+        with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT symbol, price, timestamp FROM trades WHERE outcome = 'TP' ORDER BY id DESC LIMIT 5")
+            signals = [{"symbol": s, "price": p, "time": t} for s, p, t in cursor.fetchall()]
+            return signals if signals else [{"symbol": "N/A", "price": 0, "time": "N/A"}]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching signals: {e}")
 
-Thread(target=send_report, daemon=True).start()
+@app.post("/api/set_leverage")
+async def set_leverage(request: LeverageRequest):
+    try:
+        bot.set_leverage(request.leverage)
+        set_config("leverage", str(request.leverage))
+        return {"status": f"Leverage set to: {request.leverage}x"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error setting leverage: {e}")
+
+@app.post("/api/set_manual_amount")
+async def set_manual_amount(request: AmountRequest):
+    try:
+        bot.set_manual_amount(request.amount)
+        set_config("manual_amount", str(request.amount))
+        return {"status": f"Manual amount set to: {request.amount} USDT"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error setting manual amount: {e}")
+
+@app.get("/api/logs")
+async def get_logs():
+    try:
+        with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT timestamp, message FROM bot_logs ORDER BY id DESC LIMIT 10")
+            return [{"time": t, "message": m} for t, m in cursor.fetchall()]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching logs: {e}")
