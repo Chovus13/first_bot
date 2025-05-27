@@ -88,6 +88,13 @@ def export_candidates_to_json():
     except Exception as e:
         log_action(f"Error exporting candidates to JSON: {e}")
 
+def log_action(message):
+    with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
+        cursor = conn.cursor()
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("INSERT INTO bot_logs (timestamp, message) VALUES (?, ?)", (now, message))
+        conn.commit()
+
 # Constants
 SYMBOLS = []
 ROUND_LEVELS = [0.01, 0.1, 0.5, 1, 5, 10, 50, 100, 500, 1000]
