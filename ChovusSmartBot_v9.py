@@ -290,11 +290,11 @@ class ChovusSmartBot:
             log_action(f"Scanning complete. Selected {len(pairs)} candidates.")
             return pairs[:limit]
 
-    # U ChovusSmartBot_v9.py, ažuriraj export_candidates_to_json
+    # U ChovusSmartBot_v9.py, ažuriraj export_candidates_to_json #SETI#SE permisije za 777 /user_data
     def export_candidates_to_json():
         try:
             log_action("Exporting candidates to JSON...")
-            with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
+            with sqlite3.connect(DB_PATH, check_same_thread=False) as conn: ####EXPORT CANDFIDATE to json ima i 297 i gore 72
                 cursor = conn.cursor()
                 cursor.execute("SELECT timestamp, symbol, price, score FROM candidates ORDER BY id DESC LIMIT 10")
                 candidates = [{"time": t, "symbol": s, "price": p, "score": sc} for t, s, p, sc in cursor.fetchall()]
