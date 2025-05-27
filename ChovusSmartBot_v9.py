@@ -398,6 +398,7 @@ class ChovusSmartBot:
             log_action(f"Error opening long position for {symbol}: {e}")
             return None, None
 
+    # U ChovusSmartBot_v9.py, ažuriraj _main_bot_loop i _scan_pairs
     async def _main_bot_loop(self):
         log_action("[BOT] Starting main bot loop...")
         while self.running:
