@@ -229,7 +229,7 @@ class ChovusSmartBot:
                 return True
         return False
 
-    def ai_score(self, price, volume, avg_volume, crossover, in_fib_zone):
+    def ai_score(self, price, volume, avg_volume, crossover, in_fib_zone): #zapazanja i preporuke, kao
         score = 0
         if self.is_near_round(price): score += 1
         if volume > avg_volume * VOLUME_SPIKE_THRESHOLD: score += 1
