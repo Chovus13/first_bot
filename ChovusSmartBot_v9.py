@@ -256,8 +256,8 @@ class ChovusSmartBot:
         score = 0
         if self.is_near_round(price): score += 1
         if volume > avg_volume * VOLUME_SPIKE_THRESHOLD: score += 1
-        if crossover: score += 1.5
-        if in_fib_zone: score += 0.5
+        if crossover: score += 1.2  # Smanjeno sa 1.5
+        if in_fib_zone: score += 0.8  # Povećano sa 0.5
         return min(score / 4.0, 1.0)
 
 
@@ -305,7 +305,7 @@ class ChovusSmartBot:
                         log_action(
                             f"Scanned {symbol} | Price: {price:.4f} | Volume: {volume:.2f} | Score: {score:.2f} | Crossover: {crossover} | Fib Zone: {in_fib_zone}")
                         log_candidate(symbol, price, score)
-                        if score > 0.5:
+                        if score > 0.4:  # Smanjen sa 0.5 na 0.4 ##########################################
                             pairs.append((symbol, price, volume, score))
                             log_action(f"Candidate selected: {symbol} | Price: {price:.4f} | Score: {score:.2f}")
                     else:
