@@ -133,7 +133,7 @@ async def get_market_data(symbol: str = "ETH/BTC"):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching market data: {e}")
 
-# U main.py, ažuriraj /api/candidates
+# U main.py, ažuriraj /api/candidates - polako
 @app.get("/api/candidates")
 async def get_candidates():
     try:
